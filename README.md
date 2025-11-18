@@ -1,269 +1,452 @@
-<div align="center">
- 👋 Hi, everyone!
-    verl is a RL training library initiated by <b>ByteDance Seed team</b> and maintained by the verl community.
-    <br>
-    <br>
-</div>
+# Megatron训练
+基于对 `recipe/dapo/test_dapo_dspk_671b_megatron_96gb.sh`：
 
-<div align="center">
-
-<a href="https://deepwiki.com/volcengine/verl"><img src="https://devin.ai/assets/deepwiki-badge.png" alt="Ask DeepWiki.com" style="height:20px;"></a>
-[![GitHub Repo stars](https://img.shields.io/github/stars/volcengine/verl)](https://github.com/volcengine/verl/stargazers)
-[![Twitter](https://img.shields.io/twitter/follow/verl_project)](https://twitter.com/verl_project)
-<a href="https://join.slack.com/t/verl-project/shared_invite/zt-3c6mc2khw-v0lo6NfDPuFP6OnkrZwfqw"><img src="https://img.shields.io/badge/Slack-verl-blueviolet?logo=slack&amp"></a>
-<a href="https://arxiv.org/pdf/2409.19256"><img src="https://img.shields.io/static/v1?label=EuroSys&message=Paper&color=red"></a>
-[![Documentation](https://img.shields.io/badge/documentation-blue)](https://verl.readthedocs.io/en/latest/)
-<a href="https://raw.githubusercontent.com/eric-haibin-lin/verl-community/refs/heads/main/WeChat.JPG"><img src="https://img.shields.io/badge/微信-green?logo=wechat&amp"></a>
-
-</div>
-
-![seed logo](https://github.com/user-attachments/assets/c42e675e-497c-4508-8bb9-093ad4d1f216)
-
-<h1 style="text-align: center;">verl: Volcano Engine Reinforcement Learning for LLMs</h1>
-
-verl is a flexible, efficient and production-ready RL training library for large language models (LLMs).
-
-verl is the open-source version of **[HybridFlow: A Flexible and Efficient RLHF Framework](https://arxiv.org/abs/2409.19256v2)** paper.
-
-verl is flexible and easy to use with:
-
-- **Easy extension of diverse RL algorithms**: The hybrid-controller programming model enables flexible representation and efficient execution of complex post-training dataflows. Build RL dataflows such as GRPO, PPO in a few lines of code.
-
-- **Seamless integration of existing LLM infra with modular APIs**: Decouples computation and data dependencies, enabling seamless integration with existing LLM frameworks, such as FSDP, Megatron-LM, vLLM, SGLang, etc
-
-- **Flexible device mapping**: Supports various placement of models onto different sets of GPUs for efficient resource utilization and scalability across different cluster sizes.
-
-- Ready integration with popular HuggingFace models
-
-verl is fast with:
-
-- **State-of-the-art throughput**: SOTA LLM training and inference engine integrations and SOTA RL throughput.
-
-- **Efficient actor model resharding with 3D-HybridEngine**: Eliminates memory redundancy and significantly reduces communication overhead during transitions between training and generation phases.
-
-</p>
-
-## News
-- [2025/10] verl is presented in the [PyTorch Conference 2025](https://pytorch.org/event/pytorch-conference-2025/).
-- [2025/08] verl is presented in the [PyTorch Expert Exchange Webinar](https://www.youtube.com/watch?v=Vd79NmmqY3Q&t=2s). [Slides](https://github.com/eric-haibin-lin/verl-community/blob/main/slides/verl_talk_pytorch_2025_08.pdf) available.
-- [2025/07] The [ReTool](https://arxiv.org/pdf/2504.11536) recipe is fully open sourced. [Blog](https://www.notion.so/verl-reTool-recipe-Using-multi-round-conversations-and-code-sandboxing-to-improve-the-math-of-large-23a8b5b7feba80b386b2e5b5e3c1cde0)
-- [2025/07] The first verl meetup will be held at ICML Vancouver on July 16th! Please [join us](https://lu.ma/0ek2nyao) if you are at ICML! (onsite only)
-- [2025/06] verl with Megatron backend enables large MoE models such as [DeepSeek-671B and Qwen3-235B](https://verl.readthedocs.io/en/latest/perf/dpsk.html).
-- [2025/03] [DAPO](https://dapo-sia.github.io/) is the open-sourced SOTA RL algorithm that achieves 50 points on AIME 2024 based on the Qwen2.5-32B pre-trained model, surpassing the previous SOTA achieved by DeepSeek's GRPO (DeepSeek-R1-Zero-Qwen-32B). DAPO's training is fully powered by verl and the reproduction code is available in `recipe/dapo` now.
-<details><summary> more... </summary>
-<ul>
-  <li>[2025/04] [Seed-Thinking-v1.5](https://github.com/ByteDance-Seed/Seed-Thinking-v1.5/blob/main/seed-thinking-v1.5.pdf) tech report is released! Trained with verl, Seed-Thinking-v1.5 achieves 86.7 on AIME 2024, 55.0 on Codeforces and 77.3 on GPQA, demonstrating excellent reasoning abilities in STEM and coding. Beyond reasoning tasks, the method demonstrates notable generalization across diverse domains.</li>
-  <li>[2025/07] verl keynote at [AWS AI Hours Singapore](https://pages.awscloud.com/aws-ai-hours-sg.html#agenda) on 7/8, verl & verl-agent project updates at [Agent for SWE meetup](https://lu.ma/e498qhsi) by LF AI & Data Singapore on 7/11.</li>
-  <li>[2025/06] verl team will provide latest project updates at [PyTorch Day China](https://www.lfasiallc.com/pytorch-day-china/) on June 7th. Meet our dev team in Beijing!</li>
-  <li> [2025/04] [VAPO](https://arxiv.org/pdf/2504.05118) (value-based augmented PPO) paper covers our latest RL method for reasoning models. Trained from Qwen-32B-base model, VAPO achieves 60.4 on AIME 2024, outperforming DAPO-32B.</li>
-  <li>[2025/05] [PF-PPO](https://arxiv.org/abs/2409.06957), accepted to ICML 2025, is now supported in verl! PF-PPO enhances policy learning efficiency and robustness by filtering potentially noisy reward signals and reusing high-quality experiences via a replay buffer.</li>
-  <li>[2025/04] We will give a tutorial about latest post-training techniques and programming guide for verl at [ICLR 2025 Expo](https://iclr.cc/virtual/2025/calendar?filter_events=Expo+Talk+Panel&filter_rooms=), [SCI-FM workshop](https://open-foundation-model.github.io/) and [LMSys afterparty](https://lu.ma/d23nyynm). Talk materials available [here](https://github.com/eric-haibin-lin/verl-community/tree/main/iclr25). </li>
-  <li>[2025/03] verl v0.3.0.post1 is released! See [release note](https://github.com/volcengine/verl/releases/) for details. It achieves [~1.4x speedup](https://tongyx361.github.io/blogs/posts/verl-intro/#/verl-flexible-and-efficient-rl-for-llms) compared to prev versions.</li>
-  <li>[2025/05] verl will be presented at [A2M Shanghai](https://a2m.msup.com.cn/home/?aid=4488&city=shanghai) on 5/16 - 5/17.</li>
-  <li>[2025/05] verl will be presented at [GOSIM x PyTorch Day 2025](https://paris2025.gosim.org/). See you in Paris! </li>
-  <li>[2025/03] We introduced the programming model of verl at the [vLLM Beijing Meetup](https://mp.weixin.qq.com/s/n77GibL2corAtQHtVEAzfg) and [verl intro and updates](https://github.com/eric-haibin-lin/verl-community/blob/main/slides/verl-lmsys-meetup.pdf) at the [SGLang-LMSYS Org Meetup](https://lu.ma/ntjrr7ig) in Sunnyvale mid-March.</li>
-  <li>[2025/03] We will present verl(HybridFlow) at EuroSys 2025. See you in Rotterdam!</li>
-  <li>[2025/02] verl v0.2.0.post2 is released!</li>
-  <li>[2025/02] We presented verl in the <a href="https://lu.ma/ji7atxux">Bytedance/NVIDIA/Anyscale Ray Meetup</a>. See you in San Jose!</li>
-  <li>[2025/01] [Doubao-1.5-pro](https://team.doubao.com/zh/special/doubao_1_5_pro) is released with SOTA-level performance on LLM & VLM. The RL scaling preview model is trained using verl, reaching OpenAI O1-level performance on math benchmarks (70.0 pass@1 on AIME).</li>
-  <li>[2024/12] verl is presented at Ray Forward 2024. Slides available <a href="https://github.com/eric-haibin-lin/verl-community/blob/main/slides/Ray_Forward_2024_%E5%B7%AB%E9%94%A1%E6%96%8C.pdf">here</a></li>
-  <li>[2024/12] The team presented <a href="https://neurips.cc/Expo/Conferences/2024/workshop/100677">Post-training LLMs: From Algorithms to Infrastructure</a> at NeurIPS 2024. <a href="https://github.com/eric-haibin-lin/verl-data/tree/neurips">Slides</a> and <a href="https://neurips.cc/Expo/Conferences/2024/workshop/100677">video</a> available.</li>
-  <li>[2024/10] verl is presented at Ray Summit. <a href="https://www.youtube.com/watch?v=MrhMcXkXvJU&list=PLzTswPQNepXntmT8jr9WaNfqQ60QwW7-U&index=37">Youtube video</a> available.</li>
-  <li>[2024/08] HybridFlow (verl) is accepted to EuroSys 2025.</li>
-</ul>
-</details>
-
-## Key Features
-
-- **FSDP**, **FSDP2** and **Megatron-LM** for training.
-- **vLLM**, **SGLang** and **HF Transformers** for rollout generation.
-- Compatible with Hugging Face Transformers and Modelscope Hub: [Qwen-3](https://github.com/volcengine/verl/blob/main/examples/grpo_trainer/run_qwen3-8b.sh), Qwen-2.5, Llama3.1, Gemma2, DeepSeek-LLM, etc
-- Supervised fine-tuning.
-- Reinforcement learning with [PPO](examples/ppo_trainer/), [GRPO](examples/grpo_trainer/), [GSPO](recipe/gspo/), [ReMax](examples/remax_trainer/), [REINFORCE++](https://verl.readthedocs.io/en/latest/examples/config.html#algorithm), [RLOO](examples/rloo_trainer/), [PRIME](recipe/prime/), [DAPO](recipe/dapo/), [DrGRPO](recipe/drgrpo), [KL_Cov & Clip_Cov](recipe/entropy) etc.
-  - Support model-based reward and function-based reward (verifiable reward) for math, [coding](https://github.com/volcengine/verl/tree/main/recipe/dapo), etc
-  - Support vision-language models (VLMs) and [multi-modal RL](examples/grpo_trainer/run_qwen2_5_vl-7b.sh) with Qwen2.5-vl, Kimi-VL
-  - [Multi-turn with tool calling](https://github.com/volcengine/verl/tree/main/examples/sglang_multiturn)
-- LLM alignment recipes such as [Self-play preference optimization (SPPO)](https://github.com/volcengine/verl/tree/main/recipe/sppo)
-- Flash attention 2, [sequence packing](examples/ppo_trainer/run_qwen2-7b_seq_balance.sh), [sequence parallelism](examples/ppo_trainer/run_deepseek7b_llm_sp2.sh) support via DeepSpeed Ulysses, [LoRA](examples/sft/gsm8k/run_qwen_05_peft.sh), [Liger-kernel](examples/sft/gsm8k/run_qwen_05_sp2_liger.sh).
-- Scales up to 671B models and hundreds of GPUs with [expert parallelism](https://github.com/volcengine/verl/pull/1467)
-- Multi-gpu [LoRA RL](https://verl.readthedocs.io/en/latest/advance/ppo_lora.html) support to save memory.
-- Experiment tracking with wandb, swanlab, mlflow and tensorboard.
-
-## Upcoming Features and Changes
-
-- Q3 Roadmap https://github.com/volcengine/verl/issues/2388
-- DeepSeek 671b optimizations with Megatron https://github.com/volcengine/verl/issues/1033
-- Multi-turn rollout and tools using optimizations https://github.com/volcengine/verl/issues/1882
-- [Agent integration](https://github.com/volcengine/verl/tree/main/verl/experimental/agent_loop)
-- Async and off-policy architecture https://github.com/volcengine/verl/pull/2231
-- List of breaking changes since v0.4 https://github.com/volcengine/verl/discussions/2270
-
-## Getting Started
-
-<a href="https://verl.readthedocs.io/en/latest/index.html"><b>Documentation</b></a>
-
-**Quickstart:**
-
-- [Installation](https://verl.readthedocs.io/en/latest/start/install.html)
-- [Quickstart](https://verl.readthedocs.io/en/latest/start/quickstart.html)
-- [Programming Guide](https://verl.readthedocs.io/en/latest/hybrid_flow.html) & [Tech Talk](https://hcqnc.xetlk.com/sl/3vACOK) (in Chinese)
-- [PPO in verl](https://verl.readthedocs.io/en/latest/algo/ppo.html)
-- [GRPO in verl](https://verl.readthedocs.io/en/latest/algo/grpo.html)
-
-**Running a PPO example step-by-step:**
-
-- [Prepare Data for Post-Training](https://verl.readthedocs.io/en/latest/preparation/prepare_data.html)
-- [Implement Reward Function for Dataset](https://verl.readthedocs.io/en/latest/preparation/reward_function.html)
-- [PPO Example Architecture](https://verl.readthedocs.io/en/latest/examples/ppo_code_architecture.html)
-- [Config Explanation](https://verl.readthedocs.io/en/latest/examples/config.html)
-
-**Reproducible algorithm baselines:**
-
-- [RL performance on coding, math](https://verl.readthedocs.io/en/latest/algo/baseline.html)
-
-**For code explanation and advance usage (extension):**
-
-- PPO Trainer and Workers
-  - [PPO Ray Trainer](https://verl.readthedocs.io/en/latest/workers/ray_trainer.html)
-  - [PyTorch FSDP Backend](https://verl.readthedocs.io/en/latest/workers/fsdp_workers.html)
-  - [Megatron-LM Backend](https://verl.readthedocs.io/en/latest/index.html)
-
-- Advanced Usage and Extension
-  - [Add Models with the FSDP Backend](https://verl.readthedocs.io/en/latest/advance/fsdp_extension.html)
-  - [Add Models with the Megatron-LM Backend](https://verl.readthedocs.io/en/latest/advance/megatron_extension.html)
-  - [Multi-turn Rollout Support](https://verl.readthedocs.io/en/latest/sglang_multiturn/multiturn.html)
-  - [Search Tool Integration](https://verl.readthedocs.io/en/latest/sglang_multiturn/search_tool_example.html)
-  - [Sandbox Fusion Integration](https://verl.readthedocs.io/en/latest/examples/sandbox_fusion_example.html)
-  - [Deployment using Separate GPU Resources](https://github.com/volcengine/verl/tree/main/examples/split_placement)
-  - [Extend to Other RL(HF) algorithms](https://verl.readthedocs.io/en/latest/advance/dpo_extension.html)
-  - [Ray API design tutorial](https://verl.readthedocs.io/en/latest/advance/placement.html)
-
-**Blogs from the community**
-
-- [When Reasoning Models Break Tokenization: The Hidden Complexity of Multiturn Training](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/fast_tokenization/multiturn_tokenization_and_masking.md)
-- [verl deployment on AWS SageMaker](https://medium.com/@kaige.yang0110/run-verl-on-sagemaker-using-4x8-l40s-gpus-8e6d5c3c61d3)
-- [verl x SGLang Multi-turn Code Walkthrough](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/code-walk-through/readme_EN.md)
-- [Optimizing SGLang Memory Usage in verl](https://hebiao064.github.io/rl-memory-management)
-- [SGLang, verl, OpenBMB and Tsinghua University: Pioneering End-to-End Multi-Turn RLHF](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/verl-multiturn-rollout-Release.md)
-- [Reinforcement Learning from Human Feedback on AMD GPUs with verl and ROCm Integration](https://rocm.blogs.amd.com/artificial-intelligence/verl-large-scale/README.html)
-- [veMLP x verl ：玩转强化学习训练](https://mp.weixin.qq.com/s/7nbqxk4knMGd-hQE9ls2tA)
-- [使用 verl 进行 GRPO 分布式强化学习训练最佳实践](https://www.volcengine.com/docs/6459/1463942)
-- [HybridFlow verl 原文浅析](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/readme.md)
-- [最高提升 20 倍吞吐量！豆包大模型团队发布全新 RLHF 框架，现已开源！](https://team.doubao.com/en/blog/%E6%9C%80%E9%AB%98%E6%8F%90%E5%8D%8720%E5%80%8D%E5%90%9E%E5%90%90%E9%87%8F-%E8%B1%86%E5%8C%85%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%9B%A2%E9%98%9F%E5%8F%91%E5%B8%83%E5%85%A8%E6%96%B0-rlhf-%E6%A1%86%E6%9E%B6-%E7%8E%B0%E5%B7%B2%E5%BC%80%E6%BA%90)
-
-## Performance Tuning Guide
-
-The performance is essential for on-policy RL algorithm. We have written a detailed [performance tuning guide](https://verl.readthedocs.io/en/latest/perf/perf_tuning.html) to help you optimize performance.
-
-## Upgrade to vLLM >= v0.8.2
-
-verl now supports vLLM>=0.8.2 when using FSDP as the training backend. Please refer to [this document](https://github.com/volcengine/verl/blob/main/docs/README_vllm0.8.md) for the installation guide and more information. Please avoid vllm 0.7.x, which contains bugs that may lead to OOMs and unexpected errors.
-
-## Use Latest SGLang
-
-SGLang is fully supported with verl, and SGLang RL Group is working extensively on building unique features, including multi-turn agentic RL, VLM RLHF, server-based RL, and partial rollout. Please refer to [this document](https://verl.readthedocs.io/en/latest/workers/sglang_worker.html) for the installation guide and more information.
-
-## Upgrade to FSDP2
-
-verl is fully embracing FSDP2! FSDP2 is recommended by torch distributed team, providing better throughput and memory usage, and is composible with other features (e.g. torch.compile). To enable FSDP2, simply use verl main and set the following options:
-```
-actor_rollout_ref.ref.strategy=fsdp2
-actor_rollout_ref.actor.strategy=fsdp2
-critic.strategy=fsdp2
-reward_model.strategy=fsdp2
-```
-Furthermore, FSDP2 cpu offloading is compatible with gradient accumulation. You can turn it on to save memory with `actor_rollout_ref.actor.fsdp_config.offload_policy=True`. For more details, see https://github.com/volcengine/verl/pull/1026
-
-## AMD Support (ROCm Kernel)
-
-verl now supports FSDP as the training engine (Megatron support coming soon) and both integrates with vLLM and SGLang as inference engines. Please refer to [this document](https://github.com/volcengine/verl/blob/main/docs/amd_tutorial/amd_build_dockerfile_page.rst) for the installation guide and more information, and [this document](https://github.com/volcengine/verl/blob/main/docs/amd_tutorial/amd_vllm_page.rst) for the vLLM performance tuning for ROCm.
-
-
-## Citation and acknowledgement
-
-If you find the project helpful, please cite:
-
-- [HybridFlow: A Flexible and Efficient RLHF Framework](https://arxiv.org/abs/2409.19256v2)
-- [A Framework for Training Large Language Models for Code Generation via Proximal Policy Optimization](https://i.cs.hku.hk/~cwu/papers/gmsheng-NL2Code24.pdf)
-
-```bibtex
-@article{sheng2024hybridflow,
-  title   = {HybridFlow: A Flexible and Efficient RLHF Framework},
-  author  = {Guangming Sheng and Chi Zhang and Zilingfeng Ye and Xibin Wu and Wang Zhang and Ru Zhang and Yanghua Peng and Haibin Lin and Chuan Wu},
-  year    = {2024},
-  journal = {arXiv preprint arXiv: 2409.19256}
-}
+## 1）训练代码如何一步步调用到megatron的初始化和并行训练代码
+### 入口脚本启动流程：
+```javascript
+recipe/dapo/test_dapo_dspk_671b_megatron_96gb.sh
+└── python3 -m verl.trainer.main_ppo
 ```
 
-verl is inspired by the design of Nemo-Aligner, Deepspeed-chat and OpenRLHF. The project is adopted and contributed by Bytedance, Anyscale, LMSys.org, [Alibaba Qwen team](https://github.com/QwenLM/), Shanghai AI Lab, Tsinghua University, UC Berkeley, UCLA, UIUC, University of Hong Kong, ke.com, [All Hands AI](https://www.all-hands.dev/), [ModelBest](http://modelbest.cn/), JD AI Lab, Microsoft Research, [StepFun](https://www.stepfun.com/), Amazon, LinkedIn, Meituan, [Camel-AI](https://www.camel-ai.org/), [OpenManus](https://github.com/OpenManus), Xiaomi, NVIDIA research, [Baichuan](https://www.baichuan-ai.com/home), [RedNote](https://www.xiaohongshu.com/), [SwissAI](https://www.swiss-ai.org/), [Moonshot AI (Kimi)](https://www.moonshot-ai.com/), Baidu, Snowflake, Skywork.ai, JetBrains, [IceSword Lab](https://www.iceswordlab.com), and many more.
+### 主要调用链：
+**第一层：训练入口**
 
-## Awesome work using verl
++ `verl.trainer.main_ppo:main()`
++ `verl.trainer.main_ppo:run_ppo()`
++ `verl.trainer.main_ppo:TaskRunner.run()`
 
-- [TinyZero](https://github.com/Jiayi-Pan/TinyZero): a reproduction of **DeepSeek R1 Zero** recipe for reasoning tasks ![GitHub Repo stars](https://img.shields.io/github/stars/Jiayi-Pan/TinyZero)
-- [SkyThought](https://github.com/NovaSky-AI/SkyThought): RL training for Sky-T1-7B by NovaSky AI team. ![GitHub Repo stars](https://img.shields.io/github/stars/NovaSky-AI/SkyThought)
-- [simpleRL-reason](https://github.com/hkust-nlp/simpleRL-reason): SimpleRL-Zoo: Investigating and Taming Zero Reinforcement Learning for Open Base Models in the Wild ![GitHub Repo stars](https://img.shields.io/github/stars/hkust-nlp/simpleRL-reason)
-- [Easy-R1](https://github.com/hiyouga/EasyR1): **Multi-modal** RL training framework ![GitHub Repo stars](https://img.shields.io/github/stars/hiyouga/EasyR1)
-- [OpenManus-RL](https://github.com/OpenManus/OpenManus-RL): LLM Agents RL tuning framework for multiple agent environments. ![GitHub Repo stars](https://img.shields.io/github/stars/OpenManus/OpenManus-RL)
-- [rllm](https://github.com/agentica-project/rllm): async RL training with [verl-pipeline](https://github.com/agentica-project/verl-pipeline) ![GitHub Repo stars](https://img.shields.io/github/stars/agentica-project/rllm)
-- [RAGEN](https://github.com/ZihanWang314/ragen): a general-purpose reasoning **agent** training framework ![GitHub Repo stars](https://img.shields.io/github/stars/ZihanWang314/ragen)
-- [Search-R1](https://github.com/PeterGriffinJin/Search-R1): RL with reasoning and **searching (tool-call)** interleaved LLMs ![GitHub Repo stars](https://img.shields.io/github/stars/PeterGriffinJin/Search-R1)
-- [ReSearch](https://github.com/Agent-RL/ReSearch): Learning to **Re**ason with **Search** for LLMs via Reinforcement Learning ![GitHub Repo stars](https://img.shields.io/github/stars/Agent-RL/ReSearch)
-- [Skywork-OR1](https://github.com/SkyworkAI/Skywork-OR1): Skywork open reaonser series ![GitHub Repo stars](https://img.shields.io/github/stars/SkyworkAI/Skywork-OR1)
-- [ToRL](https://github.com/GAIR-NLP/ToRL): Scaling tool-integrated RL ![GitHub Repo stars](https://img.shields.io/github/stars/GAIR-NLP/ToRL)
-- [Absolute Zero Reasoner](https://github.com/LeapLabTHU/Absolute-Zero-Reasoner): [A no human curated data self-play framework for reasoning](https://arxiv.org/abs/2505.03335) ![GitHub Repo stars](https://img.shields.io/github/stars/LeapLabTHU/Absolute-Zero-Reasoner)
-- [verl-agent](https://github.com/langfengQ/verl-agent): A scalable training framework for **long-horizon LLM/VLM agents**, along with a new algorithm **GiGPO** ![GitHub Repo stars](https://img.shields.io/github/stars/langfengQ/verl-agent)
-- [RL-Factory](https://github.com/Simple-Efficient/RL-Factory): An easy and efficient RL post-training framework for Agentic Learning ![GitHub Repo stars](https://img.shields.io/github/stars/Simple-Efficient/RL-Factory)
-- [ReTool](https://retool-rl.github.io/): ReTool: reinforcement learning for strategic tool use in LLMs. Code release is in progress...
-- [verl-tool](https://github.com/TIGER-AI-Lab/verl-tool): An unified and easy-to-extend tool-agent training framework based on verl![GitHub Repo stars](https://img.shields.io/github/stars/TIGER-AI-Lab/verl-tool)
-- [PRIME](https://github.com/PRIME-RL/PRIME): Process reinforcement through implicit rewards ![GitHub Repo stars](https://img.shields.io/github/stars/PRIME-RL/PRIME)
-- [MemAgent](https://github.com/BytedTsinghua-SIA/MemAgent): MemAgent: Reshaping Long-Context LLM with Multi-Conv RL based Memory Agent ![GitHub Repo stars](https://img.shields.io/github/stars/BytedTsinghua-SIA/MemAgent)
-- [POLARIS](https://github.com/ChenxinAn-fdu/POLARIS): A Post-training recipe for scaling RL on Advanced Reasoning models ![GitHub Repo stars](https://img.shields.io/github/stars/ChenxinAn-fdu/POLARIS)
-- [GUI-R1](https://github.com/ritzz-ai/GUI-R1): **GUI-R1**: A Generalist R1-style Vision-Language Action Model For **GUI Agents** ![GitHub Repo stars](https://img.shields.io/github/stars/ritzz-ai/GUI-R1)
-- [DeepRetrieval](https://github.com/pat-jj/DeepRetrieval): RL Training of **Search Agent** with **Search/Retrieval Outcome** ![GitHub Repo stars](https://img.shields.io/github/stars/pat-jj/DeepRetrieval)
-- [Code-R1](https://github.com/ganler/code-r1): Reproducing R1 for **Code** with Reliable Rewards ![GitHub Repo stars](https://img.shields.io/github/stars/ganler/code-r1)
-- [DeepResearcher](https://github.com/GAIR-NLP/DeepResearcher): Scaling deep research via reinforcement learning in real-world environments ![GitHub Repo stars](https://img.shields.io/github/stars/GAIR-NLP/DeepResearcher)
-- [VAGEN](https://github.com/RAGEN-AI/VAGEN): Training VLM agents with multi-turn reinforcement learning ![GitHub Repo stars](https://img.shields.io/github/stars/RAGEN-AI/VAGEN)
-- [RM-R1](https://arxiv.org/abs/2505.02387): RL training of reasoning reward models ![GitHub Repo stars](https://img.shields.io/github/stars/RM-R1-UIUC/RM-R1)
-- [LUFFY](https://arxiv.org/pdf/2504.14945): Learning to Reason under Off-Policy Guidance![GitHub Repo stars](https://img.shields.io/github/stars/ElliottYan/LUFFY)
-- [DeepMath](https://github.com/zwhe99/DeepMath): DeepMath-103K data and series models for math reasoning![GitHub Repo stars](https://img.shields.io/github/stars/zwhe99/DeepMath)
-- [PACS](https://github.com/ritzz-ai/PACS): Implicit Actor Critic Coupling via a Supervised Learning Framework for RLVR ![GitHub Repo stars](https://img.shields.io/github/stars/ritzz-ai/PACS)
-- [Entropy Mechanism of RL](https://github.com/PRIME-RL/Entropy-Mechanism-of-RL): The Entropy Mechanism of Reinforcement Learning for Large Language Model Reasoning![GitHub Repo stars](https://img.shields.io/github/stars/PRIME-RL/Entropy-Mechanism-of-RL)
-- [LLaSA-TTS-GRPO](https://github.com/channel-io/ch-tts-llasa-rl-grpo): TTS fine-tuning with GRPO optimization based on LLASA models ![GitHub Repo stars](https://img.shields.io/github/stars/channel-io/ch-tts-llasa-rl-grpo)
-- [PF-PPO](https://arxiv.org/abs/2409.06957): Policy Filtration for PPO based on the reliability of reward signals for more efficient and robust RLHF.
-- [RACRO](https://github.com/gyhdog99/RACRO2): Build multi-modal reasoning models via decoupling it into query-conditioned captioning and text-only reasoning ![GitHub Repo stars](https://img.shields.io/github/stars/gyhdog99/RACRO2)
-- [Agent Lightning](https://github.com/microsoft/agent-lightning): A flexible and extensible framework that enables seamless agent optimization for any existing agent framework. ![GitHub Repo stars](https://img.shields.io/github/stars/microsoft/agent-lightning)
-- [VTool-R1](https://github.com/VTOOL-R1/vtool-r1): VLMs Learn to Think with Images via Reinforcement Learning on Multimodal Tool Use. ![GitHub Repo stars](https://img.shields.io/github/stars/VTOOL-R1/vtool-r1)
-- [Kimina-Prover-RL](https://github.com/project-numina/kimina-prover-rl/tree/main/recipe/kimina_prover_rl): Training pipeline for formal theorem proving, based on a paradigm inspired by DeepSeek-R1.
-- [RL-PLUS](https://github.com/YihongDong/RL-PLUS): Countering Capability Boundary Collapse of LLMs in Reinforcement Learning with Hybrid-policy Optimization.
-- [rStar2-Agent](https://github.com/microsoft/rStar): Using reinforcement learning with multi-step tool-calling for math tasks, rStar2-Agent-14B reaches frontier-level math reasoning in just 510 RL training steps ![GitHub Repo stars](https://img.shields.io/github/stars/microsoft/rStar)
-- [Vision-SR1](https://github.com/zli12321/Vision-SR1): Self-Rewarding Vision-Language Model via Reasoning Decomposition ![GitHub Repo stars](https://img.shields.io/github/stars/zli12321/Vision-SR1)
-- [SimpleVLA-RL](https://github.com/PRIME-RL/SimpleVLA-RL): SimpleVLA-RL: A Simple yet Effective Vision-Language Action Model for Reinforcement Learning ![GitHub Repo stars](https://img.shields.io/github/stars/PRIME-RL/SimpleVLA-RL)
-- [Table-R1](https://github.com/Table-R1/Table-R1): Table-R1: Inference-Time Scaling for Table Reasoning ![GitHub Repo stars](https://img.shields.io/github/stars/Table-R1/Table-R1)
-- [Revisual-R1](https://github.com/CSfufu/Revisual-R1): Revisual-R1: Advancing Multimodal Reasoning From Optimized Cold Start to Staged Reinforcement Learning ![GitHub Repo stars](https://img.shields.io/github/stars/CSfufu/Revisual-R1)
-- [ARES](https://github.com/shawn0728/ARES): ARES: Multimodal Adaptive Reasoning via Difficulty-Aware Token-Level Entropy Shaping ![GitHub Repo stars](https://img.shields.io/github/stars/shawn0728/ARES)
-- [Meta-Bandit-LLM](https://github.com/sanxing-chen/meta-bandit-llm): Meta-Bandit-LLM: Long-horizon multiturn interactive training for meta-bandit agents ![GitHub Repo stars](https://img.shields.io/github/stars/sanxing-chen/meta-bandit-llm)
-- [PokeeResearch](https://github.com/Pokee-AI/PokeeResearchOSS): PokeeResearch: State-of-the-art 7B DeepResearch Agent that leverages web search and content reading capabilities to answer complex questions using the most up-to-date information available online. ![Github Repo Stars](https://img.shields.io/github/stars/Pokee-AI/PokeeResearchOSS)
+**第二层：PPO训练器初始化**
 
-and many more awesome work listed in [recipe](recipe/README.md).
++ `verl.trainer.ppo.ray_trainer:RayPPOTrainer.__init__()`
++ `verl.trainer.ppo.ray_trainer:RayPPOTrainer.init_workers()`
 
-## Contribution Guide
+**第三层：Worker创建和角色映射**
 
-See [contributions guide](CONTRIBUTING.md)
++ `verl.trainer.main_ppo:TaskRunner.add_actor_rollout_worker()`
+    - 根据 `config.actor_rollout_ref.actor.strategy == "megatron"`
+    - 导入 `verl.workers.megatron_workers:ActorRolloutRefWorker`
 
-## About [ByteDance Seed Team](https://team.doubao.com/)
+**第四层：Megatron Worker初始化**
 
-Founded in 2023, ByteDance Seed Team is dedicated to crafting the industry's most advanced AI foundation models. The team aspires to become a world-class research team and make significant contributions to the advancement of science and society. You can get to know Bytedance Seed better through the following channels👇
-<div>
-  <a href="https://team.doubao.com/">
-    <img src="https://img.shields.io/badge/Website-%231e37ff?style=for-the-badge&logo=bytedance&logoColor=white"></a>
-  <a href="https://github.com/user-attachments/assets/469535a8-42f2-4797-acdf-4f7a1d4a0c3e">
-    <img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white"></a>
- <a href="https://www.xiaohongshu.com/user/profile/668e7e15000000000303157d?xsec_token=ABl2-aqekpytY6A8TuxjrwnZskU-6BsMRE_ufQQaSAvjc%3D&xsec_source=pc_search">
-    <img src="https://img.shields.io/badge/Xiaohongshu-%23FF2442?style=for-the-badge&logo=xiaohongshu&logoColor=white"></a>
-  <a href="https://www.zhihu.com/org/dou-bao-da-mo-xing-tuan-dui/">
-    <img src="https://img.shields.io/badge/zhihu-%230084FF?style=for-the-badge&logo=zhihu&logoColor=white"></a>
++ `verl.workers.megatron_workers:ActorRolloutRefWorker.__init__()`
+    - 初始化分布式环境：`torch.distributed.init_process_group()`
+    - 初始化Megatron并行状态：`mpu.initialize_model_parallel()`
+        * `tensor_model_parallel_size=train_tp=1`
+        * `pipeline_model_parallel_size=train_pp=16`
+        * `expert_model_parallel_size=train_ep=32`
 
-</div>
----
+**第五层：模型构建**
 
-We are HIRING! Send us an [email](mailto:the.verl.project@gmail.com) if you are interested in internship/FTE opportunities in RL for agents.
++ `verl.workers.megatron_workers:ActorRolloutRefWorker.init_model()`
++ `verl.workers.megatron_workers:ActorRolloutRefWorker._build_model_optimizer()`
++ `verl.utils.megatron_utils:make_megatron_module()`
+
+**第六层：Megatron核心模型初始化**
+
++ `verl.models.mcore.registry:init_mcore_model()`
++ `verl.models.mcore.model_initializer:DeepseekV3Model.initialize()`
++ `megatron.core.models.gpt.gpt_model:GPTModel.__init__()`
+
+**第七层：并行训练执行**
+
++ `verl.trainer.ppo.ray_trainer:RayPPOTrainer.fit()`
++ `verl.workers.megatron_workers:ActorRolloutRefWorker.update_actor()`
++ `verl.workers.actor.megatron_actor:MegatronPPOActor.update_policy()`
+
+## 2）如何一步步调用到megatron的attention module
+### Attention模块调用链：
+**第一层：模型前向传播**
+
++ `verl.models.mcore.model_forward:gptmodel_forward()`
++ 调用 `GPTModel.forward()`
+
+**第二层：Transformer层处理**
+
++ `megatron.core.models.gpt.gpt_model:GPTModel.forward()`
++ 遍历 `self.decoder.layers` (每个Transformer层)
+
+**第三层：单个Transformer层**
+
++ `megatron.core.transformer.transformer_layer:TransformerLayer.forward()`
++ 调用 `self.self_attention.forward()`
+
+**第四层：Self-Attention核心**
+
++ `megatron.core.transformer.attention:SelfAttention.forward()`
++ **关键QKV线性变换**：`self.linear_qkv(hidden_states)`
+    - 这是attention的核心计算入口
+
+**第五层：QKV并行计算**
+
++ `megatron.core.transformer.attention:SelfAttention._linear_qkv()`
++ 在tensor parallel模式下，QKV被分割到不同的GPU
++ 每个GPU计算部分的Q、K、V向量
+
+**第六层：Attention核心计算**
+
++ `megatron.core.transformer.attention:SelfAttention._attn_func()`
++ 计算注意力分数：`attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))`
++ 应用softmax：`attention_probs = torch.nn.functional.softmax(attention_scores, dim=-1)`
++ 计算输出：`context_layer = torch.matmul(attention_probs, value_layer)`
+
+**第七层：输出投影**
+
++ `megatron.core.transformer.attention:SelfAttention.linear_proj()`
++ 将attention输出投影回hidden_size维度
+
+### 关键配置参数：
++ `tensor_model_parallel_size=1`：张量并行度
++ `pipeline_model_parallel_size=16`：流水线并行度
++ `expert_model_parallel_size=32`：专家并行度（MoE）
++ `num_attention_heads`：注意力头数
++ `num_key_value_heads`：KV头数（用于分组查询注意力）
+
+# FSDP训练
+recipe/dapo/run_dapo_qwen2.5_32b_fsdp2.sh
+
+## 1）PyTorch FSDP2 调用链
+### 完整API调用序列：
+**入口脚本层**：
+
++ `recipe/dapo/run_dapo_qwen2.5_32b_fsdp2.sh:main()` →
++ `recipe/dapo/main_dapo.py:main()` →
++ `recipe/dapo/main_dapo.py:run_ppo()` →
++ `recipe/dapo/dapo_ray_trainer.py:RayDAPOTrainer.fit()`
+
+**训练层**：
+
++ `recipe/dapo/dapo_ray_trainer.py:RayDAPOTrainer.fit()` →
++ `recipe/dapo/**dapo_ray_trainer.py**:actor_rollout_wg.**update_actor**(batch)` →
++ `verl/workers/**fsdp_workers.py**:ActorRolloutRefWorker.**update_actor**()` →
++ `verl/workers/**actor/dp_actor.py**:DataParallelPPOActor.**update_policy()**`
+
+**FSDP2核心层**：
+
++ `verl/workers/fsdp_workers.py:ActorRolloutRefWorker.init_model`
+    - `_build_model_optimizer()` 
+        * actor_module = actor_module_class.from_pretrained
+        * apply_monkey_patch
+        * **actor_module_fsdp** = FSDP || **apply_fsdp2(actor_module, fsdp_kwargs, fsdp_config)**
+        * `verl/utils/fsdp_utils.py:**<font style="background-color:#FBDE28;">apply_fsdp2</font>**()` →
+            + `torch.distributed.fsdp.fully_shard()` (PyTorch原生)
+        * **actor_optimizer **= optim.AdamW
+        * **actor_lr_scheduler** = get_cosine_schedule_with_warmup
+    - self.**actor_module** = self.actor_module_fsdp._fsdp_wrapped_module #fsdp1
+    - offload_fsdp_model_to_cpu
+    - offload_fsdp_optimizer
+
+**关键函数调用详情**：
+
+1. **模型初始化阶段**：
+    - `verl/workers/fsdp_workers.py:ActorRolloutRefWorker.__init__()` →
+    - `verl/workers/fsdp_workers.py:create_device_mesh()` →
+    - `verl/workers/fsdp_workers.py:_build_model_optimizer()` →
+    - `verl/utils/fsdp_utils.py:**<font style="background-color:#FBDE28;">apply_fsdp2</font>**<font style="background-color:#FBDE28;">(model, fsdp_kwargs, config)</font>`
+
+```bash
+   modules = []
+    for name, module in model.named_modules():
+        if module.__class__.__name__ in fsdp_transformer_layer_cls_to_wrap or (
+            isinstance(module, nn.Embedding) and not model.config.tie_word_embeddings
+        ):
+            modules.append(module)
+
+    for idx, module in enumerate(modules):
+        # if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+        #     print(f"wrap module {module.__class__.__name__}")
+        with maybe_patch_fsdp_module(module):
+            fully_shard(module, **fsdp_kwargs)
+
+```
+
+2. **FSDP2应用阶段**：
+    - `verl/utils/fsdp_utils.py:apply_fsdp2()` 中的关键逻辑：
+
+```python
+# 对于Qwen2.5-32B，会包装transformer层和embedding层
+for name, module in model.named_modules():
+    if module.__class__.__name__ in fsdp_transformer_layer_cls_to_wrap:
+        fully_shard(module, **fsdp_kwargs)
+fully_shard(model, **fsdp_kwargs)
+```
+
+3. **训练更新阶段**：
+    - `verl/workers/actor/dp_actor.py:DataParallelPPOActor.update_policy()` →
+    - `verl/workers/actor/dp_actor.py:_optimizer_step()` →
+    - `verl/utils/fsdp_utils.py:fsdp2_clip_grad_norm_()`
+
+## 2）从DataParallelPPOActor.update_policy()到PyTorch FSDP2的完整调用链
+### Forward计算路径：
+**训练入口**：
+
++ `verl/workers/actor/**dp_actor.py**:DataParallelPPOActor.update_policy()` →
++ `verl/workers/actor/**dp_actor.py**:DataParallelPPOActor._forward_micro_batch()` →
++ `verl/workers/actor/**dp_actor.py**:self.actor_module(input_ids=..., attention_mask=..., position_ids=...)`
+
+**FSDP2 Forward调用**：
+
++ `verl/workers/actor/dp_actor.py:self.actor_module()` (这是一个被FSDP2包装的模型) →
++ `torch.distributed.**fsdp.FSDPModule.__call__()**` (PyTorch FSDP2的forward入口) →
++ `torch.distributed.fsdp._runtime_utils._exec_forward()` →
++ `torch.distributed.fsdp._runtime_utils._pre_forward()` (参数reshard) →
++ `原始模型的forward()` (Qwen2.5模型的forward) →
++ `torch.distributed.fsdp._runtime_utils._post_forward()` (参数offload)
+
+**Qwen2.5 LLM的Attention调用**：
+
++ `transformers.models.qwen2.modeling_qwen2.**Qwen2Attention.forward**()` →
++ `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()` (如果启用Ulysses) →
++ `transformers.modeling_flash_attention_utils._flash_attention_forward()` →
++ `flash_attn.**flash_attn_func()**`** (底层Flash Attention)**
+
+### Backward计算路径：
+**Backward触发**：
+
++ `verl/workers/actor/dp_actor.py:DataParallelPPOActor._forward_micro_batch()` 返回log_probs →
++ `verl/workers/actor/dp_actor.py:DataParallelPPOActor.update_policy()` 中计算loss →
++ `loss.backward()` (PyTorch自动求导)
+
+**FSDP2 Backward调用**：
+
++ `torch.autograd.backward()` (PyTorch自动求导入口) →
++ `torch.distributed.fsdp.FSDPModule.backward()` (FSDP2拦截backward) →
++ `torch.distributed.fsdp._runtime_utils._exec_backward()` →
++ `torch.distributed.fsdp._runtime_utils._backward_pre_forward_hook()` (梯度聚合) →
++ `torch.distributed.fsdp._runtime_utils._reduce_grads()` (跨节点梯度reduce) →
++ `torch.distributed.fsdp._runtime_utils._backward_post_forward_hook()` (梯度处理)
+
+### Optimizer更新路径：
+**Optimizer Step**：
+
++ `verl/workers/actor/dp_actor.py:DataParallelPPOActor._optimizer_step()` →
++ `verl/utils/fsdp_utils.py:fsdp2_clip_grad_norm_()` (FSDP2梯度裁剪) →
++ `self.actor_optimizer.step()` (FSDP2包装的optimizer) →
++ `torch.distributed.fsdp.FSDPOptimizer.step()` →
++ `torch.distributed.fsdp._runtime_utils._exec_optimizer_step()` →
++ `torch.distributed.fsdp._runtime_utils._pre_optimizer_step()` (参数reshard) →
++ `原始optimizer.step()` →
++ `torch.distributed.fsdp._runtime_utils._post_optimizer_step()` (参数offload)
+
+## 3）PyTorch Attention Module 调用链 (Qwen2.5 LLM)
+### 完整API调用序列：
+**Attention模块初始化**：
+
++ `verl/workers/fsdp_workers.py:ActorRolloutRefWorker._build_model_optimizer()` →
++ `verl/models/transformers/monkey_patch.py:apply_monkey_patch()` →
++ `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()`
+
+**具体调用路径**：
+
+1. **Monkey Patch阶段**：
+    - `verl/models/transformers/monkey_patch.py:apply_monkey_patch()` →
+    - 对于Qwen2.5-32B LLM模型，会patch `transformers.models.qwen2.modeling_qwen2.Qwen2Attention.forward` →
+    - 替换为 `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()`
+2. **Forward执行阶段**：
+    - `verl/workers/actor/dp_actor.py:DataParallelPPOActor._forward_micro_batch()` →
+    - `verl/workers/actor/dp_actor.py:self.actor_module()` →
+    - `transformers.models.qwen2.modeling_qwen2.Qwen2ForCausalLM.forward()` →
+    - `transformers.models.qwen2.modeling_qwen2.Qwen2Model.forward()` →
+    - `transformers.models.qwen2.modeling_qwen2.Qwen2DecoderLayer.forward()` →
+    - `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()` →
+    - `transformers.modeling_flash_attention_utils._flash_attention_forward()` →
+    - `flash_attn.flash_attn_func()`
+3. **Flash Attention调用**：
+    - `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()` →
+    - `transformers.modeling_flash_attention_utils._flash_attention_forward()` →
+    - `flash_attn.flash_attn_func()` (底层Flash Attention)
+
+**关键Attention函数详情**：
+
+1. **Ulysses序列并行支持**：
+    - `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()` →
+    - `verl/utils/ulysses:gather_seq_scatter_heads()` →
+    - `verl/utils/ulysses:gather_heads_scatter_seq()`
+2. **Qwen2.5 LLM的Attention实现**：
+    - `transformers.models.qwen2.modeling_qwen2.Qwen2Attention.forward()` (被patch) →
+    - `verl/models/transformers/monkey_patch.py:_ulysses_flash_attention_forward()` (patch后的版本)
+3. **底层Flash Attention**：
+    - `transformers.modeling_flash_attention_utils._flash_attention_forward()` →
+    - `flash_attn.flash_attn_func()` →
+    - `flash_attn.flash_attn_varlen_func()` (如果使用remove_padding)
+
+## 总结
+这个调用链展示了从脚本入口到底层PyTorch FSDP2和Flash Attention的完整路径：
+
+1. **FSDP2路径**：脚本 → Ray Trainer → FSDP Worker → apply_fsdp2 → PyTorch fully_shard → FSDPModule.forward/backward
+2. **Attention路径**：脚本 → Monkey Patch → Qwen2Attention → _ulysses_flash_attention_forward → Flash Attention
+
+
+
+# vllm推理
+#### 入口脚本层
++ `recipe/dapo/run_dapo_qwen2.5_32b_tis.sh` → 调用 `python3 -m recipe.dapo.main_dapo`
+
+#### 主程序层
++ `recipe/dapo/main_dapo.py` → `main()` → `run_ppo()` → `TaskRunner.run()`
+    - 创建 `RayDAPOTrainer` 实例
+    - 调用 `trainer.init_workers()` 和 `trainer.fit()`
+
+#### 训练器层
++ `recipe/dapo/dapo_ray_trainer.py` → `RayDAPOTrainer.fit()`
+    - 继承自 `RayPPOTrainer.fit()`
+    - 调用 `self.actor_rollout_wg.generate_sequences(gen_batch)`
+
+#### 基础训练器层
++ `verl/trainer/ppo/ray_trainer.py` → `RayPPOTrainer.init_workers()`
+    - 创建 `ActorRolloutRefWorker` 实例
+    - 调用 `self.actor_rollout_wg.init_model()`
+
+#### Worker层
++ `verl/workers/fsdp_workers.py` → `ActorRolloutRefWorker.init_model()`
+    - 调用 `self._build_rollout()`
+    - 创建 rollout 实例：`self.rollout = get_rollout_class(rollout_config.name, rollout_config.mode)`
+
+#### Rollout工厂层
++ `verl/workers/rollout/base.py` → `get_rollout_class("vllm", "sync")`
+    - 返回 `verl.workers.rollout.vllm_rollout.vLLMRollout`
+
+#### vLLM Rollout层
++ `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py` → `vLLMRollout.__init__()`
+    - 初始化 vLLM 引擎：`self.inference_engine = LLM(...)`
+    - 调用 `self.inference_engine.generate()` 进行推理
+
+## 2）如何一步步调用到vllm的attention module？
+### vLLM Attention Module调用序列：
+#### vLLM引擎初始化
++ `vLLMRollout.__init__()` → `LLM(model=model_path, ...)`
+    - 创建 vLLM 推理引擎
+    - 配置 tensor_parallel_size、dtype 等参数
+
+#### 模型加载和权重更新
++ `vLLMRollout.update_weights()` → `model.load_weights(weights)`
+    - 获取模型：`self.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model`
+    - 调用 vLLM 内部的权重加载机制
+
+#### 推理执行
++ `vLLMRollout.generate_sequences()` → `self.inference_engine.generate(prompts=vllm_inputs, ...)`
+    - vLLM 引擎内部的推理流程
+    - **关键调用路径**：
+        * `LLM.generate()` → `llm_engine.generate()`
+        * `llm_engine.generate()` → `model_executor.execute_model()`
+        * `model_executor.execute_model()` → `worker.model_runner.execute_model()`
+        * `model_runner.execute_model()` → `model.forward()`
+
+#### Attention Module调用
++ **模型前向传播** → `model.forward()` → **各个Transformer层的forward**
+    - `Qwen2ForCausalLM.forward()` → `model(input_ids, ...)`
+    - `Qwen2Model.forward()` → 遍历各个layer
+    - `Qwen2DecoderLayer.forward()` → `self_attn.forward()`
+    - `Qwen2Attention.forward()` → **核心attention计算**
+        * 调用 flash_attention_2 实现
+        * 执行 QKV projection、attention score计算、softmax、value aggregation等
+
+#### 关键的Attention相关函数：
++ `Qwen2Attention.forward()` - 主要attention逻辑
++ `flash_attn_func()` - Flash Attention实现（通过attn_implementation="flash_attention_2"配置）
++ `apply_rotary_pos_emb()` - 旋转位置编码
++ `repeat_kv()` - KV head扩展（用于GQA/MQA）
+
+### 配置关键点：
+从脚本中可以看到关键配置：
+
+```bash
+actor_rollout_ref.rollout.name=vllm
+actor_rollout_ref.rollout.tensor_model_parallel_size=${gen_tp}  # 4
+actor_rollout_ref.rollout.enable_chunked_prefill=True
+```
+
+这确保了使用vLLM作为推理后端，并启用了tensor parallel和chunked prefill优化。
+
+整个调用链路从shell脚本开始，经过多层抽象，最终调用到vLLM引擎内部的attention模块进行高效的推理计算
+
+
+
+# SGLang推理
+## 1）代码如何一步步调用到sglang相关初始化和推理的API调用序列
+### 入口脚本层
++ `recipe/dapo/run_dapo_qwen2.5_32b_tis.sh` → 调用主训练脚本
+    - 设置 `actor_rollout_ref.rollout.name=sglang`
+
+### 主训练入口层
++ `recipe/dapo/main_dapo.py:main()` → 主函数入口
++ `recipe/dapo/main_dapo.py:run_ppo()` → 运行PPO训练
++ `recipe/dapo/main_dapo.py:TaskRunner.run()` → 任务运行器
++ `recipe/dapo/main_dapo.py:RayDAPOTrainer()` → 创建DAPO训练器
+
+### 训练器层
++ `recipe/dapo/dapo_ray_trainer.py:RayDAPOTrainer.fit()` → 训练循环
++ `recipe/dapo/dapo_ray_trainer.py:RayDAPOTrainer._validate()` → 验证阶段
++ `recipe/dapo/dapo_ray_trainer.py:RayDAPOTrainer.generate_sequences()` → 生成序列调用
+
+### Worker层
++ `verl/workers/fsdp_workers.py:ActorRolloutRefWorker.generate_sequences()` → 生成序列
++ `verl/workers/fsdp_workers.py:ActorRolloutRefWorker._build_rollout()` → 构建rollout
+
+### Rollout工厂层
++ `verl/workers/rollout/base.py:get_rollout_class()` → 获取rollout类
+    - 根据 `("sglang", "sync")` 返回 `SGLangRollout`
+
+### SGLang Rollout层
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:SGLangRollout.__init__()` → 初始化
+    - `_init_distributed_env()` → 初始化分布式环境
+    - `_verify_config()` → 验证配置
+    - `_init_inference_engine()` → 初始化推理引擎
+    - `_init_sampling_params()` → 初始化采样参数
+
+### SGLang引擎层
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:AsyncEngine.__init__()` → 异步引擎初始化
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:SGLangRollout.generate_sequences()` → 生成序列
+    - `_batch_level_generate_sequences()` → 批量级别生成
+    - `_req_level_generate_sequences()` → 请求级别生成
+
+### 推理执行层
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:AsyncEngine.async_generate()` → 异步生成
++ `verl/workers/rollout/sglang_rollout/http_server_engine.py:AsyncHttpServerAdapter.generate()` → HTTP适配器生成
+
+## 2）代码如何一步步调用到sglang的attention module的API调用序列
+### Attention Backend配置层
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:SGLangRollout._init_inference_engine()` → 初始化推理引擎
+    - 设置 `attention_backend = "fa3"` (默认) 或从配置获取
+    - 传递给SGLang引擎参数：
+
+```python
+"mm_attention_backend": backend,
+"attention_backend": backend,
+```
+
+### SGLang内部Attention调用链
++ `sglang.srt.entrypoints.engine.Engine` → SGLang引擎入口
++ `sglang.srt.managers.tokenizer_manager.TokenizerManager` → Tokenizer管理器
++ `sglang.srt.managers.model_runner.ModelRunner` → 模型运行器
++ `sglang.srt.layers.attention` → Attention层实现
+    - **FlashInfer Attention Backend** (`flashinfer`)
+    - **FA3 Attention Backend** (`fa3`) - 默认选择
+
+### Attention Module具体调用路径
+1. **模型前向传播**：
+    - `ModelRunner.forward()` → 调用模型前向传播
+    - `TransformerBlock.forward()` → Transformer块前向传播
+    - `Attention.forward()` → Attention层前向传播
+2. **Attention Backend选择**：
+    - 根据 `attention_backend` 参数选择具体实现
+    - 默认使用 `fa3` (FlashAttention-3) 后端
+    - 可配置为 `flashinfer` 后端
+3. **Attention计算**：
+    - **FA3 Backend**: `sglang.srt.layers.fa3_attention.Fa3Attention`
+    - **FlashInfer Backend**: `sglang.srt.layers.flashinfer_attention.FlashInferAttention`
+
+### 权重同步中的Attention相关调用
++ `verl/workers/rollout/sglang_rollout/sglang_rollout.py:SGLangRollout.update_weights()` → 更新权重
++ `sglang.srt.weight_sync.utils.update_weights()` → SGLang权重同步工具
++ **Attention层权重更新** → 更新Query、Key、Value、Output投影矩阵
+
+### 分布式并行中的Attention
++ `verl/third_party/sglang/parallel_state.py` → 并行状态管理
++ `get_tensor_model_parallel_group()` → 获取张量并行组
++ **Attention张量并行** → Attention计算在TP组间并行执行
+
+## 关键配置参数
++ `attention_backend`: "fa3" (默认) 或 "flashinfer"
++ `tensor_model_parallel_size`: 张量并行大小
++ `mm_attention_backend`: 多模态attention后端
++ `gpu_memory_utilization`: GPU内存利用率
