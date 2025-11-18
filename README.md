@@ -450,3 +450,186 @@ actor_rollout_ref.rollout.enable_chunked_prefill=True
 + `tensor_model_parallel_size`: 张量并行大小
 + `mm_attention_backend`: 多模态attention后端
 + `gpu_memory_utilization`: GPU内存利用率
+
+## 完整训练流程的函数调用链
+## 核心函数功能映射表
+| 函数名 | 文件位置 | 关键输入 | 关键输出 |
+| --- | --- | --- | --- |
+| `RayDAPOTrainer.fit` | `recipe/dapo/dapo_ray_trainer.py:85` | 数据加载器 | 训练好的模型 |
+| `ActorRolloutRefWorker.generate_sequences` | `verl/workers/fsdp_workers.py:1089` | prompts | 生成序列 |
+| `ActorRolloutRefWorker.rollout_mode` | `verl/workers/fsdp_workers.py:650` | - | vLLM就绪状态 |
+| `vLLMRollout.generate_sequences` | `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py:200` | prompts | 批量生成结果 |
+| `DataParallelPPOActor.compute_log_prob` | `verl/workers/actor/dp_actor.py:150` | 序列数据 | 对数概率 |
+| `compute_advantage` | `verl/trainer/ppo/ray_trainer.py:280` | 奖励数据 | 优势函数 |
+| `apply_kl_penalty` | `verl/trainer/ppo/ray_trainer.py:120` | 策略概率 | 惩罚后奖励 |
+| `compute_gae_advantage_return` | `verl/trainer/ppo/core_algos.py:200` | 奖励+价值 | GAE优势 |
+| `compute_grpo_outcome_advantage` | `verl/trainer/ppo/core_algos.py:250` | outcome奖励 | 相对优势 |
+| `DataParallelPPOActor.update_policy` | `verl/workers/actor/dp_actor.py:250` | 优势数据 | 更新后的策略 |
+| `compute_policy_loss_vanilla` | `verl/trainer/ppo/core_algos.py:600` | 概率+优势 | PPO损失 |
+| `CriticWorker.update_critic` | `verl/workers/fsdp_workers.py:1450` | 回报数据 | 更新后的价值函数 |
+
+
+## 数据流转换图
+```mermaid
+flowchart LR
+    subgraph "输入数据"
+        A1[input_ids]
+        A2[attention_mask]
+        A3[position_ids]
+    end
+    
+    subgraph "Rollout阶段"
+        B1[responses]
+        B2[rollout_log_probs]
+        B3[response_mask]
+    end
+    
+    subgraph "奖励阶段"
+        C1[token_level_scores]
+        C2[token_level_rewards]
+        C3[kl_penalty]
+    end
+    
+    subgraph "优势阶段"
+        D1[advantages]
+        D2[returns]
+        D3[value_preds]
+    end
+    
+    subgraph "更新阶段"
+        E1[policy_loss]
+        E2[value_loss]
+        E3[gradients]
+    end
+    
+    A1 --> B1
+    A2 --> B2
+    A3 --> B3
+    
+    B1 --> C1
+    B2 --> C2
+    B3 --> C3
+    
+    C1 --> D1
+    C2 --> D2
+    C3 --> D3
+    
+    D1 --> E1
+    D2 --> E2
+    D3 --> E3
+```
+
+## 关键设计模式图解
+### 1. 混合引擎模式
+```mermaid
+graph TB
+    subgraph "训练模式 FSDP"
+        F1[分片参数存储]
+        F2[梯度计算]
+        F3[参数更新]
+    end
+    
+    subgraph "推理模式 vLLM"
+        V1[完整权重加载]
+        V2[高效推理]
+        V3[KV缓存]
+    end
+    
+    subgraph "模式切换"
+        S1[rollout_mode]
+        S2[trainer_mode]
+    end
+    
+    F1 --> S1
+    S1 --> V1
+    V2 --> S2
+    S2 --> F2
+    F3 --> F1
+```
+
+### 2. 分层计算架构
+```mermaid
+graph TD
+    subgraph "Driver层 流程控制"
+        D1[RayDAPOTrainer.fit]
+        D2[compute_advantage]
+        D3[apply_kl_penalty]
+    end
+    
+    subgraph "Worker层 模型计算"
+        W1[ActorRolloutRefWorker]
+        W2[DataParallelPPOActor]
+        W3[CriticWorker]
+    end
+    
+    subgraph "Algorithm层 算法实现"
+        A1[compute_gae_advantage_return]
+        A2[compute_policy_loss_vanilla]
+        A3[vLLMRollout.generate_sequences]
+    end
+    
+    D1 --> W1
+    D2 --> A1
+    D3 --> D2
+    W1 --> A3
+    W2 --> A2
+    W3 --> W2
+```
+
+### 3. 内存优化策略
+```mermaid
+graph LR
+    subgraph "内存管理"
+        M1[参数卸载到CPU]
+        M2[梯度累积]
+        M3[动态批处理]
+        M4[KV缓存清理]
+    end
+    
+    subgraph "优化效果"
+        O1[减少GPU内存占用]
+        O2[降低通信频率]
+        O3[提高GPU利用率]
+        O4[避免内存泄漏]
+    end
+    
+    M1 --> O1
+    M2 --> O2
+    M3 --> O3
+    M4 --> O4
+```
+
+## 函数调用时序图
+```mermaid
+sequenceDiagram
+    participant Main as RayDAPOTrainer.fit
+    participant Rollout as ActorRolloutRefWorker
+    participant vLLM as vLLMRollout
+    participant PPOActor as DataParallelPPOActor
+    participant Critic as CriticWorker
+    participant Algo as core_algos
+    
+    loop 每个训练批次
+        Main->>Rollout: generate_sequences()
+        Rollout->>Rollout: rollout_mode()
+        Rollout->>vLLM: generate_sequences()
+        vLLM-->>Rollout: 生成结果
+        Rollout->>Rollout: trainer_mode()
+        Rollout->>PPOActor: compute_log_prob()
+        Rollout-->>Main: 完整序列数据
+        
+        Main->>Main: compute_reward()
+        Main->>Main: apply_kl_penalty()
+        Main->>Algo: compute_advantage()
+        Algo-->>Main: 优势函数
+        
+        Main->>Rollout: update_actor()
+        Rollout->>PPOActor: update_policy()
+        PPOActor->>Algo: compute_policy_loss_vanilla()
+        Algo-->>PPOActor: PPO损失
+        PPOActor-->>Rollout: 更新完成
+        
+        Main->>Critic: update_critic()
+        Critic-->>Main: 价值函数更新
+    end
+```
