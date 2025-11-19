@@ -28,6 +28,8 @@ All CI tests are configured by yaml files in `.github/workflows/`. Here's an ove
   - Since cpu/gpu unit tests by default runs all tests under `tests`, please make sure tests are manually excluded in them when
     - new workflow yaml is added to `.github/workflows`
     - new tests are added to workflow mentioned in 2.
+
+# VeRL overall
    
 ## 1) vLLM Rollout阶段generate_sequences()的返回输出
 
@@ -37,8 +39,8 @@ __返回的DataProto包含以下batch字段__:
 
 - __prompts__: `[batch_size, prompt_length]` - 来自数据集的原始prompt token ids
 - __responses__: `[batch_size, response_length]` - LLM生成的response token ids（包括生成的tokens和observation tokens）
-- __response_mask__: `[batch_size, response_length]` - 1表示LLM生成的tokens，0表示observation/padding tokens
 - __input_ids__: `[batch_size, prompt_length + response_length]` - 完整序列token ids（prompt + response）
+- __response_mask__: `[batch_size, response_length]` - 1表示LLM生成的tokens，0表示observation/padding tokens
 - __attention_mask__: `[batch_size, prompt_length + response_length]` - 0表示padding tokens，1表示其他tokens
 - __position_ids__: `[batch_size, prompt_length + response_length]` 或 `[batch_size, 3/4, prompt_length + response_length]` - 递增的position ids（对于qwen2vl等模型可能是3D/4D）
 - __rollout_log_probs__ (可选): `[batch_size, response_length]` - rollout时计算的log概率（当config.rollout.calculate_log_probs=True时）
