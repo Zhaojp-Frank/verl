@@ -83,6 +83,158 @@ __输出__:
 - __log_probs__: `[batch_size, response_length]` - response部分的log概率
 - __entropys__: `[batch_size, response_length]` 或 None - entropy值（如果calculate_entropy=True）
 
+```python
+        for micro_batch in micro_batches:
+            micro_batch = micro_batch.to(get_device_id())
+            model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
+            with torch.no_grad():
+                entropy, log_probs = self._forward_micro_batch(
+                    model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
+                )
+            log_probs_lst.append(log_probs)
+            if calculate_entropy:
+                entropy_lst.append(entropy)
+
+        log_probs = torch.concat(log_probs_lst, dim=0)
+        entropys = None
+        if calculate_entropy:
+            entropys = torch.concat(entropy_lst, dim=0)
+
+        if use_dynamic_bsz:
+            log_probs = restore_dynamic_batch(log_probs, batch_idx_list)
+            if calculate_entropy:
+                entropys = restore_dynamic_batch(entropys, batch_idx_list)
+
+        return log_probs, entropys
+```
+### 1. __log_probs__ 的使用路径：
+
+#### 在 Worker 层面的使用：
+
+- __`verl/workers/megatron_workers.py`__ (第 1085-1090 行)：
+
+  ```python
+  output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+  output = DataProto.from_dict(
+      tensors={"old_log_probs": output, "entropys": entropys},
+      meta_info={"temperature": self.config.rollout.temperature},
+  )
+  ```
+
+- __`verl/workers/fsdp_workers.py`__ (第 847-852 行)：
+
+  ```python
+  output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+  output = DataProto.from_dict(
+      tensors={"old_log_probs": output, "entropys": entropys},
+      meta_info={"temperature": self.config.rollout.temperature},
+  )
+  ```
+
+#### 在 Trainer 层面的使用：
+
+- __`verl/trainer/ppo/ray_trainer.py`__ (第 1165-1173 行)：
+
+  ```python
+  old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+  entropys = old_log_prob.batch["entropys"]
+  response_masks = batch.batch["response_mask"]
+  loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+  entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+  old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+  ```
+
+#### 在 Actor 训练中的使用：
+
+- __`verl/workers/actor/dp_actor.py`__ (第 350-355 行)：
+
+  ```python
+  old_log_prob = model_inputs["old_log_probs"]
+  advantages = model_inputs["advantages"]
+  # 在 policy_loss_fn 中使用
+  pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower = policy_loss_fn(
+      old_log_prob=old_log_prob,
+      log_prob=log_prob,
+      advantages=advantages,
+      response_mask=response_mask,
+      loss_agg_mode=loss_agg_mode,
+      config=self.config,
+      rollout_is_weights=rollout_is_weights,
+  )
+  ```
+
+#### 在 KL 惩罚计算中的使用：
+
+- __`verl/trainer/ppo/ray_trainer.py`__ (第 200-202 行)：
+
+  ```python
+  kld = core_algos.kl_penalty(
+      data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty
+  )
+  ```
+
+#### 在重要性采样权重计算中的使用：
+
+- __`verl/trainer/ppo/ray_trainer.py`__ (第 1179 行)：
+
+  ```python
+  batch, is_metrics = self.compute_rollout_importance_weights_and_add_to_batch(batch)
+  # 在 compute_rollout_importance_weights 函数中使用 old_log_probs
+  ```
+
+### 2. __entropys__ 的使用路径：
+
+#### 主要用于熵正则化：
+
+- __`verl/trainer/ppo/ray_trainer.py`__ (第 1167-1172 行)：
+
+  ```python
+  entropys = old_log_prob.batch["entropys"]
+  response_masks = batch.batch["response_mask"]
+  loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+  entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+  old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+  ```
+
+- __`verl/workers/actor/dp_actor.py`__ (第 375-382 行)：
+
+  ```python
+  if entropy_coeff != 0:
+      entropy_loss = agg_loss(loss_mat=entropy, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+      # compute policy loss
+      policy_loss = pg_loss - entropy_loss * entropy_coeff
+  ```
+
+### 3. __相关函数和源文件总结：__
+
+| 使用场景 | 函数/方法 | 源文件 | 用途 |
+|---------|-----------|--------|------| 
+| __Worker 层面封装__ | `compute_log_prob` | `verl/workers/megatron_workers.py` | 将 log_probs 包装为 old_log_probs | 
+| __Worker 层面封装__ | `compute_log_prob` | `verl/workers/fsdp_workers.py` | 将 log_probs 包装为 old_log_probs |
+| __Trainer 调用__ | `compute_log_prob` | `verl/trainer/ppo/ray_trainer.py` | 获取 old_log_probs 和 entropys |
+| __熵指标计算__ | `agg_loss` | `verl/trainer/ppo/ray_trainer.py` | 计算熵聚合指标 | 
+| __策略损失计算__ | `policy_loss_fn` | `verl/workers/actor/dp_actor.py` | PPO 策略优化 |
+| __KL 惩罚计算__ | `kl_penalty` | `verl/trainer/ppo/ray_trainer.py` | KL 散度惩罚 | 
+| __重要性采样__ | `compute_rollout_importance_weights` | `verl/trainer/ppo/ray_trainer.py` | 计算重要性采样权重 | 
+| __熵正则化__ | `agg_loss` | `verl/workers/actor/dp_actor.py` | 策略熵正则化 |
+
+### 4. __数据流向总结：__
+
+```javascript
+compute_log_prob() 
+    ↓ (返回 log_probs, entropys)
+Worker 层面封装 (megatron_workers.py, fsdp_workers.py)
+    ↓ (包装为 DataProto{"old_log_probs", "entropys"})
+Trainer 调用 (ray_trainer.py)
+    ↓ 
+├── entropys → 熵指标计算 → 日志记录
+├── old_log_probs → 策略损失计算 → Actor 更新
+├── old_log_probs → KL 惩罚计算 → 奖励调整
+└── old_log_probs → 重要性采样权重 → 分布校正
+```
+
+这些返回值在 PPO 算法的各个环节都起到关键作用，`log_probs` 主要用于策略优化和分布匹配，而 `entropys` 主要用于探索性控制和指标监控。
+
 ## 3) compute_reward()的输入输出
 
 __相关文件__: `verl/trainer/ppo/reward.py:compute_reward()`
