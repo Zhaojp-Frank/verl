@@ -55,6 +55,94 @@ __重要函数调用链__:
 2. `verl/workers/fsdp_workers.py:ActorRolloutRefWorker.generate_sequences()` →
 3. `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py:vLLMRollout.generate_sequences()`
 
+### 2. __rollout_log_probs主要使用场景__
+
+#### __场景 1: 重要性采样权重计算__
+
+- __源文件__: `verl/trainer/ppo/ray_trainer.py`
+- __函数__: `compute_rollout_importance_weights_and_add_to_batch()` (第 1179 行)
+- __用途__: 计算 rollout 策略与训练策略之间的分布不匹配校正权重
+
+```python
+if self.config.algorithm.rollout_is_threshold is not None and "rollout_log_probs" in batch.batch:
+    rollout_is_weights, rollout_is_metrics = compute_rollout_importance_weights(
+        old_log_prob=batch.batch["old_log_probs"],
+        rollout_log_prob=batch.batch["rollout_log_probs"],
+        response_mask=batch.batch["response_mask"],
+        # ... 其他参数
+    )
+```
+
+#### __场景 2: 不匹配度量计算__
+
+- __源文件__: `verl/trainer/ppo/mismatch_helper.py`
+- __函数__: `compute_mismatch_metrics()` (第 450 行)
+- __用途__: 计算训练策略与推理策略之间的 KL 散度、困惑度等不匹配指标
+
+```python
+def compute_mismatch_metrics(
+    old_log_prob: torch.Tensor,
+    rollout_log_prob: Optional[torch.Tensor],
+    response_mask: torch.Tensor,
+) -> dict[str, Any]:
+    # 计算 KL 散度
+    metrics["mismatch_kl"] = verl_F.masked_mean(rollout_log_prob - old_log_prob, response_mask).detach().item()
+    
+    # 计算困惑度差异
+    log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+    metrics["mismatch_log_ppl_diff"] = log_ppl_diff.mean().detach().item()
+```
+
+#### __场景 3: 调试指标计算__
+
+- __源文件__: `verl/utils/debug/metrics.py`
+- __函数__: `calculate_debug_metrics()` (第 60 行)
+- __用途__: 计算 rollout 与 actor 策略的概率差异，用于调试和监控
+
+```python
+def calculate_debug_metrics(data: DataProto) -> dict:
+    rollout_old_log_probs = data.batch["rollout_log_probs"]
+    actor_old_log_probs = data.batch["old_log_probs"]
+    
+    # 计算 Pearson 相关系数
+    actor_probs = torch.exp(actor_old_log_probs)
+    rollout_probs = torch.exp(rollout_old_log_probs)
+    pearson_corrcoef = pearson_correlation_coefficient(actor_probs, rollout_probs, response_mask_bool)
+    
+    # 计算概率差异
+    rollout_probs_diff = calculate_log_prob_diff(actor_probs, rollout_probs, response_mask_bool)
+```
+
+### 3. __相关函数和源文件总结__
+
+| 使用场景 | 函数/方法 | 源文件 | 用途 |
+|---------|-----------|--------|------| 
+| __数据生成__ | `generate_sequences()` | `verl/workers/rollout/vllm_rollout/vllm_rollout_spmd.py` | 从 vLLM 生成 rollout_log_probs | 
+| __重要性采样__ | `compute_rollout_importance_weights_and_add_to_batch()` | `verl/trainer/ppo/ray_trainer.py` | 调用重要性采样计算 | 
+| __权重计算__ | `compute_rollout_importance_weights()` | `verl/trainer/ppo/mismatch_helper.py` | 计算重要性采样权重 | 
+| __不匹配度量__ | `compute_mismatch_metrics()` | `verl/trainer/ppo/mismatch_helper.py` | 计算 KL、PPL 等不匹配指标 |
+| __调试指标__ | `calculate_debug_metrics()` | `verl/utils/debug/metrics.py` | 计算概率差异和相关系数 |
+
+### 4. __数据流向总结__
+
+```javascript
+vllm_rollout_spmd.py:generate_sequences()
+    ↓ (生成 rollout_log_probs)
+ray_trainer.py:compute_rollout_importance_weights_and_add_to_batch()
+    ↓ 
+├── mismatch_helper.py:compute_rollout_importance_weights() → 重要性采样权重
+├── mismatch_helper.py:compute_mismatch_metrics() → 不匹配度量指标
+└── debug/metrics.py:calculate_debug_metrics() → 调试指标
+```
+
+### 5. __具体用途说明__
+
+1. __重要性采样权重__: 用于校正 rollout 策略（通常是 BFloat16 的 vLLM）与训练策略（通常是 FP32 的 FSDP）之间的分布差异，防止训练不稳定。
+
+2. __不匹配度量__: 监控训练过程中的分布偏移，包括 KL 散度、困惑度比率等关键指标，帮助诊断训练问题。
+
+3. __调试指标__: 提供 rollout 与 actor 策略概率分布的详细对比，包括最大差异、平均差异、Pearson 相关系数等，用于算法调试和优化。
+
 ## 2) DataParallelPPOActor.compute_log_prob()的输入输出
 
 __相关文件__: `verl/workers/actor/dp_actor.py:compute_log_prob()`
@@ -2622,3 +2710,416 @@ __SGLang额外工作__:
 4. __Tool Calling__：内置完整的工具调用支持
 5. __Multi-turn管理__：内置对话状态机和轮次管理
 6. __环境配置__：需要更多环境变量配置
+
+## 1. `compute_rollout_importance_weights()` 函数详细解析
+文件: verl/trainer/ppo/mismatch_helper.py 在rollout之后，计算advantages之前调用。
+
+### 函数签名和参数 (第 44-66 行)
+
+```python
+def compute_rollout_importance_weights(
+    old_log_prob: torch.Tensor,           # 训练策略的对数概率 (FSDP FP32)
+    rollout_log_prob: torch.Tensor,       # 推理策略的对数概率 (vLLM BFloat16)
+    response_mask: torch.Tensor,          # 有效 token 的掩码
+    rollout_is_level: str = "token",      # IS 聚合级别
+    rollout_is_mode: str = "truncate",    # 阈值处理模式
+    rollout_is_threshold: Optional[float] = None,        # 上阈值
+    rollout_is_threshold_lower: Optional[float] = None,  # 下阈值
+    rollout_is_veto_threshold: Optional[float] = 1e-4,   # 否决阈值
+) -> tuple[Optional[DataProto], dict[str, Any]]:
+```
+
+__参数说明__:
+
+- `old_log_prob`: 形状 `(batch_size, seq_length)`，来自训练策略（如 FSDP）
+- `rollout_log_prob`: 形状 `(batch_size, seq_length)`，来自推理策略（如 vLLM）
+- `response_mask`: 标记哪些 token 是有效的响应部分
+- `rollout_is_level`: 控制如何聚合 token 级别的权重
+- `rollout_is_mode`: 处理超出阈值的权重的方式
+- `rollout_is_threshold`: 重要性采样权重的上限
+- `rollout_is_veto_threshold`: 单个 token 的否决阈值
+
+### 早期返回检查 (第 68-70 行)
+
+```python
+if rollout_is_threshold is None:
+    return None, {}
+```
+
+__解释__: 如果没有设置阈值，说明不启用重要性采样，直接返回空结果。
+
+### 阈值解析 (第 72-79 行)
+
+```python
+upper_threshold = rollout_is_threshold
+if rollout_is_threshold_lower is not None:
+    lower_threshold = rollout_is_threshold_lower
+else:
+    # Default: lower = 1/upper (reciprocal)
+    lower_threshold = 1.0 / upper_threshold
+```
+
+__解释__:
+
+- 如果没有指定下阈值，默认使用上阈值的倒数
+- 例如：上阈值 = 2.0，则下阈值 = 0.5
+- 这确保了权重范围是对称的 [0.5, 2.0]
+
+### Step 1: 计算原始重要性权重 (第 81-108 行)
+
+```python
+# Step 1: Compute raw importance weights based on the specified level
+log_ratio = old_log_prob - rollout_log_prob
+
+# Pre-compute log thresholds
+device = old_log_prob.device
+log_threshold_upper = torch.log(torch.tensor(upper_threshold, device=device))
+log_threshold_lower = torch.log(torch.tensor(lower_threshold, device=device))
+
+# Safety bound to prevent numerical overflow (exp(20) ≈ 485M)
+SAFETY_BOUND = 20.0
+```
+
+__解释__:
+
+- `log_ratio = old_log_prob - rollout_log_prob` 计算对数概率比
+- 这等价于 `log(π_train/π_rollout)`
+- 预先计算对数阈值，避免重复计算
+- 设置安全边界防止 `exp()` 溢出
+
+#### Token 级别权重 (第 110-115 行)
+
+```python
+if rollout_is_level == "token":
+    # Token-level IS: π_train(a|s) / π_rollout(a|s) per token
+    log_ratio_for_metrics = log_ratio
+    
+    # Apply safety bound to prevent overflow
+    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rollout_is_weights = torch.exp(log_ratio_safe)
+```
+
+__举例说明__:
+
+```javascript
+old_log_prob = [-2.0, -1.5, -3.0]  # 训练策略
+rollout_log_prob = [-1.8, -2.0, -2.5]  # 推理策略
+log_ratio = [-0.2, 0.5, -0.5]  # 对数比
+rollout_is_weights = [0.82, 1.65, 0.61]  # 重要性采样权重
+```
+
+#### 序列级别权重 (第 117-123 行)
+
+```python
+elif rollout_is_level == "sequence":
+    # Sequence-level IS: π_train(y|x) / π_rollout(y|x) for entire sequence
+    # Product of token ratios: exp(Σ log(π_train/π_rollout))
+    log_ratio_sum = verl_F.masked_sum(log_ratio, response_mask, axis=-1).unsqueeze(-1)
+    log_ratio_for_metrics = log_ratio_sum  # Store for metrics
+    
+    # Apply safety bound to prevent overflow
+    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rollout_is_weights = torch.exp(log_ratio_sum_safe).expand_as(old_log_prob)
+```
+
+__举例说明__:
+
+```javascript
+log_ratio = [[-0.2, 0.5, -0.5], [0.3, -0.1, 0.2]]  # 2个序列，每个3个token
+response_mask = [[1, 1, 1], [1, 1, 0]]  # 第二个序列最后一个token无效
+log_ratio_sum = [[-0.2], [0.2]]  # 每个序列的求和
+rollout_is_weights = [[0.82, 0.82, 0.82], [1.22, 1.22, 0.0]]  # 扩展到原始形状
+```
+
+#### 几何平均权重 (第 125-131 行)
+
+```python
+elif rollout_is_level == "geometric":
+    # Geometric mean IS: (∏ π_train/π_rollout)^(1/T)
+    # Equivalent to exp(mean(log(π_train/π_rollout)))
+    log_ratio_mean = verl_F.masked_mean(log_ratio, response_mask, axis=-1).unsqueeze(-1)
+    log_ratio_for_metrics = log_ratio_mean  # Store for metrics
+    
+    # Geometric mean rarely explodes due to averaging, but apply safety bound anyway
+    log_ratio_mean_safe = torch.clamp(log_ratio_mean, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rollout_is_weights = torch.exp(log_ratio_mean_safe).expand_as(old_log_prob)
+```
+
+__解释__: 几何平均通过平均来平滑极端值，比序列级别更稳定。
+
+### Step 1.5: 否决机制 (第 133-148 行)
+
+```python
+# Step 1.5: Apply per-token veto check in log space (memory efficient)
+if rollout_is_veto_threshold is not None:
+    log_veto_threshold = torch.log(torch.tensor(rollout_is_veto_threshold, device=device))
+    
+    # Check if any token ratio is below veto threshold (in log space)
+    # log(π_train/π_rollout) < log(veto_threshold) ⟺ π_train/π_rollout < veto_threshold
+    catastrophic_tokens = (log_ratio < log_veto_threshold) & response_mask.bool()
+    
+    # For each sequence, check if it has any catastrophic token
+    # Use broadcasting instead of expand_as to save memory
+    has_catastrophic = catastrophic_tokens.any(dim=-1, keepdim=True)
+    
+    # Create veto mask: 0 if sequence has catastrophic token, 1 otherwise
+    veto_mask = (~has_catastrophic).float()
+```
+
+__举例说明__:
+
+```javascript
+rollout_is_veto_threshold = 1e-4  # log_veto_threshold = -9.21
+log_ratio = [[-8.0, -10.0, -7.0], [-5.0, -6.0, -8.0]]  # 对数比
+catastrophic_tokens = [[False, True, False], [False, False, False]]  # 低于阈值的token
+has_catastrophic = [[True], [False]]  # 是否有灾难性token
+veto_mask = [[0.0], [1.0]]  # 否决掩码
+```
+
+### Step 2: 计算指标 (第 150-155 行)
+
+```python
+# Step 2: Compute comprehensive metrics
+metrics = compute_is_metrics(
+    rollout_is_weights=rollout_is_weights,
+    log_ratio_for_metrics=log_ratio_for_metrics,
+    response_mask=response_mask,
+    # ... 其他参数
+)
+```
+
+### Step 3: 应用阈值处理 (第 157-175 行)
+
+```python
+# Step 3: Apply truncation or masking based on mode
+if rollout_is_mode == "truncate":
+    # Truncated IS (TIS): only cap upper bound to prevent overweighting
+    rollout_is_weights = rollout_is_weights.clamp(max=upper_threshold)
+
+elif rollout_is_mode == "mask":
+    # Masked IS (MIS): zero out weights outside [lower_threshold, upper_threshold]
+    mask = (rollout_is_weights >= lower_threshold) & (rollout_is_weights <= upper_threshold)
+    mask = mask.float()
+    
+    # Track MIS-specific metrics
+    metrics["rollout_is_masked_fraction"] = verl_F.masked_mean(1 - mask, response_mask)
+    
+    rollout_is_weights = rollout_is_weights * mask
+```
+
+__举例说明__:
+
+```javascript
+rollout_is_weights = [0.3, 1.5, 3.0, 0.8]
+upper_threshold = 2.0, lower_threshold = 0.5
+
+# Truncate 模式
+result = [0.5, 1.5, 2.0, 0.8]  # 只截断上界
+
+# Mask 模式  
+mask = [0.0, 1.0, 0.0, 1.0]  # 超出范围的被mask
+result = [0.0, 1.5, 0.0, 0.8]  # 超出范围的权重设为0
+```
+
+### 最终处理 (第 177-190 行)
+
+```python
+# Apply veto mask AFTER all thresholding
+rollout_is_weights = rollout_is_weights * veto_mask
+
+# Apply response_mask to ensure weights are 0 where mask is 0
+rollout_is_weights = rollout_is_weights * response_mask
+
+# Wrap in DataProto for consistency with worker methods
+rollout_is_weights_proto = DataProto.from_dict(tensors={"rollout_is_weights": rollout_is_weights})
+
+# Compute mismatch metrics and merge with IS metrics
+mismatch_metrics = compute_mismatch_metrics(
+    old_log_prob=old_log_prob, rollout_log_prob=rollout_log_prob, response_mask=response_mask
+)
+metrics.update(mismatch_metrics)
+```
+
+## 2. `compute_is_metrics()` 函数详细解析
+
+### 函数目的 (第 194-210 行)
+
+计算重要性采样权重的综合指标，用于监控权重分布和训练稳定性。
+
+### 否决统计 (第 218-221 行)
+
+```python
+# Track veto statistics
+metrics["rollout_is_veto_fraction"] = has_catastrophic.float().mean()
+metrics["rollout_is_catastrophic_token_fraction"] = verl_F.masked_mean(catastrophic_tokens.float(), response_mask)
+```
+
+__解释__:
+
+- `veto_fraction`: 被完全否决的序列比例
+- `catastrophic_token_fraction`: 灾难性 token 的比例
+
+### 序列/几何级别的特殊处理 (第 223-244 行)
+
+```python
+if rollout_is_level in ["sequence", "geometric"]:
+    # For sequence/geometric, compute true statistics from log-space
+    # This reflects the actual distribution before clamping
+    
+    # True max/min in log space
+    log_max = log_ratio_for_metrics.max()
+    log_min = log_ratio_for_metrics.min()
+    
+    # Convert to regular space with safety bound
+    metrics["rollout_is_max"] = torch.exp(torch.clamp(log_max, max=SAFETY_BOUND))
+    metrics["rollout_is_min"] = torch.exp(torch.clamp(log_min, max=SAFETY_BOUND))
+```
+
+__解释__: 对于序列和几何级别，在对数空间计算真实统计量，避免截断导致的偏差。
+
+### 标准差计算 (第 258-267 行)
+
+```python
+# Compute standard deviation using clamped weights to avoid overflow
+mask_count = response_mask.sum()
+if mask_count > 1:
+    # Use clamped weights for variance to avoid squaring huge values
+    weights_for_std = rollout_is_weights.clamp(min=rollout_is_threshold_lower, max=rollout_is_threshold)
+    # Use mean from clamped weights for consistency
+    mean_clamped = verl_F.masked_mean(weights_for_std, response_mask)
+    rollout_is_var = verl_F.masked_mean(weights_for_std.square(), response_mask) - mean_clamped.square()
+    metrics["rollout_is_std"] = torch.sqrt(torch.clamp(rollout_is_var, min=0.0))
+```
+
+__解释__: 使用截断后的权重计算标准差，避免平方操作导致的数值溢出。
+
+### 有效样本大小计算 (第 269-275 行)
+
+```python
+# Effective sample size (use clamped weights to avoid overflow)
+weights_for_ess = rollout_is_weights.clamp(min=rollout_is_threshold_lower, max=rollout_is_threshold)
+mean_for_ess = verl_F.masked_mean(weights_for_ess, response_mask)
+is_weights_normalized = weights_for_ess / (mean_for_ess + 1e-8)
+metrics["rollout_is_eff_sample_size"] = 1.0 / verl_F.masked_mean(is_weights_normalized.square(), response_mask)
+```
+
+__解释__: 有效样本大小 (ESS) 衡量权重的有效性，公式为：
+
+```javascript
+ESS = 1 / Σ(w_i/Σw)^2
+```
+
+ESS 越接近实际样本大小，说明权重分布越均匀。
+
+### 百分位数计算 (第 310-318 行)
+
+```python
+# Percentile metrics for better distribution understanding
+# Get all valid IS weights
+flat_weights = rollout_is_weights[response_mask.bool()]
+# Compute key percentiles (guaranteed to have elements due to assertion at function start)
+assert flat_weights.numel() > 0, "flat_weights should not be empty"
+metrics["rollout_is_p25"] = torch.quantile(flat_weights, 0.25)
+metrics["rollout_is_p50"] = torch.quantile(flat_weights, 0.50)  # median
+metrics["rollout_is_p75"] = torch.quantile(flat_weights, 0.75)
+metrics["rollout_is_p95"] = torch.quantile(flat_weights, 0.95)
+metrics["rollout_is_p99"] = torch.quantile(flat_weights, 0.99)
+```
+
+__解释__: 百分位数帮助理解权重分布的形状，识别异常值。
+
+## 3. `compute_mismatch_metrics()` 函数详细解析
+
+### 函数目的 (第 325-350 行)
+
+计算训练策略与推理策略之间的不匹配度量，用于诊断分布偏移问题。
+
+### 训练策略困惑度 (第 352-358 行)
+
+```python
+# 1. Training policy perplexity (always available)
+# Formula: exp(-1/|T| * Σ log π_training(y_t|y_<t))
+# where |T| is the number of tokens generated by the model
+mean_log_prob_training = verl_F.masked_mean(old_log_prob, response_mask, axis=-1)  # (batch_size,)
+training_ppl = torch.exp(-mean_log_prob_training).mean()  # Batch mean of per-sequence PPL
+metrics["mismatch_training_ppl"] = training_ppl.detach().item()
+```
+
+__解释__: 困惑度 PPL = exp(-平均对数概率)，衡量模型对生成文本的"惊讶程度"。
+
+__举例说明__:
+
+```javascript
+old_log_prob = [[-2.0, -1.5, -3.0], [-1.8, -2.2, -1.0]]
+response_mask = [[1, 1, 1], [1, 1, 1]]
+mean_log_prob_training = [-2.167, -1.667]  # 每个序列的平均
+training_ppl = exp(2.167) * 0.5 + exp(1.667) * 0.5 ≈ 7.6
+```
+
+### KL 散度计算 (第 365-369 行)
+
+```python
+# 2a. mismatch_kl: Direct estimator for KL(π_rollout || π_training)
+# This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
+# Positive value means rollout policy is more confident than training policy
+metrics["mismatch_kl"] = verl_F.masked_mean(rollout_log_prob - old_log_prob, response_mask).detach().item()
+```
+
+__解释__: KL(π_rollout || π_training) = E[log π_rollout - log π_training]
+
+- 正值：推理策略比训练策略更自信
+- 负值：训练策略比推理策略更自信
+
+### K3 估计器 (第 371-376 行)
+
+```python
+# 2b. mismatch_k3_kl: K3 estimator for KL(π_rollout || π_training)
+# More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
+# Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
+log_ratio = old_log_prob - rollout_log_prob
+mismatch_k3_kl_matrix = torch.exp(log_ratio) - log_ratio - 1
+metrics["mismatch_k3_kl"] = verl_F.masked_mean(mismatch_k3_kl_matrix, response_mask).detach().item()
+```
+
+__解释__: K3 估计器在小 KL 值时更稳定，使用泰勒展开的近似。
+
+### 困惑度差异 (第 383-395 行)
+
+```python
+# 2d. Log PPL difference (sequence-level perplexity difference)
+# log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+# Since ppl = exp(-log_prob), we have:
+#   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
+# Positive value means training assigns lower probability (higher PPL) than rollout
+log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+metrics["mismatch_log_ppl_diff"] = log_ppl_diff.mean().detach().item()
+metrics["mismatch_log_ppl_abs_diff"] = log_ppl_diff.abs().mean().detach().item()
+```
+
+__解释__:
+
+- `log_ppl_diff > 0`: 训练策略困惑度更高（分配更低概率）
+- `log_ppl_diff < 0`: 推理策略困惑度更高
+
+### 困惑度比率 (第 397-408 行)
+
+```python
+# 2e. PPL ratio (how much higher is training PPL vs rollout PPL)
+# IMPORTANT: Compute per-sequence ratio first, then average
+# For numerical stability, compute in log space using log_ppl_diff
+# Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
+# This is the inverse of geometric IS: ppl_ratio_i = 1 / geometric_is_i for each sequence
+ppl_ratio = torch.exp(log_ppl_diff).mean()  # mean(exp(log_ppl_diff)) = mean(ppl_ratio_i)
+metrics["mismatch_ppl_ratio"] = ppl_ratio.detach().item()
+```
+
+__解释__: 困惑度比率是几何重要性采样的倒数，衡量分布偏移的程度。
+
+## 总结
+
+这个模块实现了完整的重要性采样和不匹配度量系统，主要解决：
+
+1. __数值稳定性__: 通过安全边界、对数空间计算等技术
+2. __内存效率__: 避免创建大型中间张量
+3. __监控能力__: 提供丰富的统计指标
+4. __灵活性__: 支持多种聚合级别和阈值处理模式
