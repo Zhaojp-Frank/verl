@@ -3123,3 +3123,558 @@ __解释__: 困惑度比率是几何重要性采样的倒数，衡量分布偏�
 2. __内存效率__: 避免创建大型中间张量
 3. __监控能力__: 提供丰富的统计指标
 4. __灵活性__: 支持多种聚合级别和阈值处理模式
+
+## verl/trainer/ppo/ray_trainer.py fit()函数
+
+### 检查点加载
+
+```python
+self._load_checkpoint()
+```
+
+__解释__：加载检查点，用于恢复训练。如果存在之前的检查点，会从中断的地方继续训练。
+
+### 训练前验证
+
+```python
+if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
+    val_metrics = self._validate()
+    assert val_metrics, f"{val_metrics=}"
+    pprint(f"Initial validation metrics: {val_metrics}")
+    logger.log(data=val_metrics, step=self.global_steps)
+    if self.config.trainer.get("val_only", False):
+        return
+```
+
+__解释__：
+
+- 如果提供了验证奖励函数且配置要求训练前验证，则执行验证
+- 调用 `_validate()` 方法计算验证指标
+- 断言验证指标不为空
+- 打印并记录初始验证指标
+- 如果配置为仅验证模式，则直接返回
+
+### 跳过 Rollout 配置
+
+```python
+if self.config.actor_rollout_ref.rollout.get("skip_rollout", False):
+    rollout_skip = RolloutSkip(self.config, self.actor_rollout_wg)
+    rollout_skip.wrap_generate_sequences()
+```
+
+__解释__：如果配置了跳过 rollout，则创建 `RolloutSkip` 对象并包装生成序列的方法。
+
+### 进度条初始化
+
+```python
+progress_bar = tqdm(total=self.total_training_steps, initial=self.global_steps, desc="Training Progress")
+self.global_steps += 1
+```
+
+__解释__：
+
+- 创建 tqdm 进度条，显示总训练步数和当前步数
+- 全局步数加 1（从步骤 1 开始）
+
+### 性能分析配置
+
+```python
+last_val_metrics = None
+self.max_steps_duration = 0
+
+prev_step_profile = False
+curr_step_profile = (
+    self.global_steps in self.config.global_profiler.steps
+    if self.config.global_profiler.steps is not None
+    else False
+)
+next_step_profile = False
+```
+
+__解释__：
+
+- 初始化最后的验证指标和最大步骤持续时间
+- 设置性能分析标志：检查当前步骤是否在配置的分析步骤列表中
+
+### 主训练循环
+
+```python
+for epoch in range(self.config.trainer.total_epochs):
+    for batch_dict in self.train_dataloader:
+```
+
+__解释__：开始双层循环：外层是 epoch 循环，内层是批次循环。
+
+### 批次处理初始化
+
+```python
+metrics = {}
+timing_raw = {}
+
+with marked_timer("start_profile", timing_raw):
+    self._start_profiling(
+        not prev_step_profile and curr_step_profile
+        if self.config.global_profiler.profile_continuous_steps
+        else curr_step_profile
+    )
+```
+
+__解释__：
+
+- 初始化指标和时间记录字典
+- 使用计时器开始性能分析（如果需要）
+
+### 数据准备
+
+```python
+batch: DataProto = DataProto.from_single_dict(batch_dict)
+
+# add uid to batch
+batch.non_tensor_batch["uid"] = np.array(
+    [str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object
+)
+
+gen_batch = self._get_gen_batch(batch)
+
+# pass global_steps to trace
+gen_batch.meta_info["global_steps"] = self.global_steps
+gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+```
+
+__解释__：
+
+- 将批次字典转换为 `DataProto` 对象
+- 为每个样本添加唯一的 UID
+- 获取用于生成的批次（移除不必要的键）
+- 设置全局步数到元信息
+- 根据配置重复批次（用于多次 rollout）
+
+### 步骤计时开始
+
+```python
+is_last_step = self.global_steps >= self.total_training_steps
+with marked_timer("step", timing_raw):
+```
+
+__解释__：判断是否为最后一步，并开始步骤计时。
+
+### 生成序列
+
+```python
+# generate a batch
+with marked_timer("gen", timing_raw, color="red"):
+    if not self.async_rollout_mode:
+        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+    else:
+        gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
+
+    timing_raw.update(gen_batch_output.meta_info["timing"])
+    gen_batch_output.meta_info.pop("timing", None)
+```
+
+__解释__：
+
+- 使用计时器记录生成时间（红色显示）
+- 根据是否为异步模式选择生成方式
+- 同步模式：直接调用 actor rollout 工作组生成序列
+- 异步模式：使用异步 rollout 管理器生成序列
+- 更新时间记录并移除元信息中的时间数据
+
+### REMAX 优势估计特殊处理
+
+```python
+if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
+    if self.reward_fn is None:
+        raise ValueError("A reward_fn is required for REMAX advantage estimation.")
+
+    with marked_timer("gen_max", timing_raw, color="purple"):
+        gen_baseline_batch = deepcopy(gen_batch)
+        gen_baseline_batch.meta_info["do_sample"] = False
+        if not self.async_rollout_mode:
+            gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
+        else:
+            gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
+        batch = batch.union(gen_baseline_output)
+        reward_baseline_tensor = self.reward_fn(batch)
+        reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
+
+        batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
+
+        batch.batch["reward_baselines"] = reward_baseline_tensor
+
+        del gen_baseline_batch, gen_baseline_output
+```
+
+__解释__：
+
+- 如果使用 REMAX 优势估计器，需要生成基线序列
+- 深拷贝生成批次并设置为不采样（贪婪解码）
+- 生成基线序列并计算基线奖励
+- 将基线奖励添加到批次中
+- 清理临时变量
+
+### 批次合并和响应掩码
+
+```python
+# repeat to align with repeated responses in rollout
+batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+batch = batch.union(gen_batch_output)
+
+if "response_mask" not in batch.batch.keys():
+    batch.batch["response_mask"] = compute_response_mask(batch)
+```
+
+__解释__：
+
+- 重复原始批次以与 rollout 中的重复响应对齐
+- 将生成输出合并到批次中
+- 如果不存在响应掩码，则计算响应掩码
+
+### 批次平衡
+
+```python
+if self.config.trainer.balance_batch:
+    self._balance_batch(batch, metrics=metrics)
+```
+
+__解释__：如果配置了批次平衡，则重新排序数据使得每个 DP 等级获得相似的总 token 数。
+
+### 全局有效 token 计算
+
+```python
+batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+```
+
+__解释__：计算每个样本的全局有效 token 数量。
+
+### 奖励计算
+
+```python
+with marked_timer("reward", timing_raw, color="yellow"):
+    # compute reward model score
+    if self.use_rm and "rm_scores" not in batch.batch.keys():
+        reward_tensor = self.rm_wg.compute_rm_score(batch)
+        batch = batch.union(reward_tensor)
+
+    if self.config.reward_model.launch_reward_fn_async:
+        future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
+    else:
+        reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+```
+
+__解释__：
+
+- 使用计时器记录奖励计算时间（黄色显示）
+- 如果使用奖励模型且批次中没有 rm_scores，则计算奖励模型分数
+- 根据配置选择同步或异步方式计算奖励函数
+
+### 旧对数概率重计算
+
+```python
+with marked_timer("old_log_prob", timing_raw, color="blue"):
+    old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+    entropys = old_log_prob.batch["entropys"]
+    response_masks = batch.batch["response_mask"]
+    loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+    entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
+    old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
+    metrics.update(old_log_prob_metrics)
+    old_log_prob.batch.pop("entropys")
+    batch = batch.union(old_log_prob)
+
+    if "rollout_log_probs" in batch.batch.keys():
+        from verl.utils.debug.metrics import calculate_debug_metrics
+        metrics.update(calculate_debug_metrics(batch))
+```
+
+__解释__：
+
+- 使用计时器记录对数概率计算时间（蓝色显示）
+- 计算旧的对数概率和熵
+- 根据损失聚合模式计算聚合熵
+- 记录熵指标并移除批次中的熵数据
+- 将对数概率合并到批次中
+- 如果存在 rollout 对数概率，计算调试指标
+
+### 参考策略计算
+
+```python
+if self.use_reference_policy:
+    # compute reference log_prob
+    with marked_timer("ref", timing_raw, color="olive"):
+        if not self.ref_in_actor:
+            ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
+        else:
+            ref_log_prob = self.actor_rollout_wg.compute_ref_log_prob(batch)
+        batch = batch.union(ref_log_prob)
+```
+
+__解释__：
+
+- 如果使用参考策略，计算参考对数概率
+- 根据配置选择使用独立的参考策略工作组还是 actor 工作组
+- 使用计时器记录时间（橄榄色显示）
+
+### 价值函数计算
+
+```python
+if self.use_critic:
+    with marked_timer("values", timing_raw, color="cyan"):
+        values = self.critic_wg.compute_values(batch)
+        batch = batch.union(values)
+```
+
+__解释__：
+
+- 如果使用 critic，计算价值函数
+- 使用计时器记录时间（青色显示）
+
+### 优势计算
+
+```python
+with marked_timer("adv", timing_raw, color="brown"):
+    # we combine with rule-based rm
+    reward_extra_infos_dict: dict[str, list]
+    if self.config.reward_model.launch_reward_fn_async:
+        reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+    batch.batch["token_level_scores"] = reward_tensor
+
+    if reward_extra_infos_dict:
+        batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+
+    # compute rewards. apply_kl_penalty if available
+    if self.config.algorithm.use_kl_in_reward:
+        batch, kl_metrics = apply_kl_penalty(
+            batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty
+        )
+        metrics.update(kl_metrics)
+    else:
+        batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
+
+    # Compute rollout importance sampling weights centrally (once per batch)
+    batch, is_metrics = self.compute_rollout_importance_weights_and_add_to_batch(batch)
+    metrics.update(is_metrics)
+
+    # compute advantages, executed on the driver process
+    norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)
+
+    batch = compute_advantage(
+        batch,
+        adv_estimator=self.config.algorithm.adv_estimator,
+        gamma=self.config.algorithm.gamma,
+        lam=self.config.algorithm.lam,
+        num_repeat=self.config.actor_rollout_ref.rollout.n,
+        norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+        config=self.config.algorithm,
+    )
+```
+
+__解释__：
+
+- 使用计时器记录优势计算时间（棕色显示）
+- 如果是异步奖励计算，获取异步结果
+- 设置 token 级别分数
+- 更新额外的奖励信息
+- 如果配置了 KL 惩罚，应用 KL 惩罚到奖励
+- 计算 rollout 重要性采样权重
+- 调用 `compute_advantage` 函数计算优势估计
+
+### Critic 更新
+
+```python
+if self.use_critic:
+    with marked_timer("update_critic", timing_raw, color="pink"):
+        critic_output = self.critic_wg.update_critic(batch)
+    critic_output_metrics = reduce_metrics(critic_output.meta_info["metrics"])
+    metrics.update(critic_output_metrics)
+```
+
+__解释__：
+
+- 如果使用 critic，更新 critic 参数
+- 使用计时器记录时间（粉色显示）
+- 聚合并记录 critic 输出指标
+
+### Actor 更新
+
+```python
+if self.config.trainer.critic_warmup <= self.global_steps:
+    # update actor
+    with marked_timer("update_actor", timing_raw, color="red"):
+        batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
+        actor_output = self.actor_rollout_wg.update_actor(batch)
+    actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
+    metrics.update(actor_output_metrics)
+```
+
+__解释__：
+
+- 如果过了 critic 预热阶段，更新 actor 参数
+- 设置多轮对话标志
+- 使用计时器记录时间（红色显示）
+- 聚合并记录 actor 输出指标
+
+### Rollout 数据记录
+
+```python
+rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+if rollout_data_dir:
+    self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
+```
+
+__解释__：如果配置了 rollout 数据目录，则记录 rollout 数据到磁盘。
+
+### 验证
+
+```python
+if (
+    self.val_reward_fn is not None
+    and self.config.trainer.test_freq > 0
+    and (is_last_step or self.global_steps % self.config.trainer.test_freq == 0)
+):
+    with marked_timer("testing", timing_raw, color="green"):
+        val_metrics: dict = self._validate()
+        if is_last_step:
+            last_val_metrics = val_metrics
+    metrics.update(val_metrics)
+```
+
+__解释__：
+
+- 如果满足验证条件（有验证函数、测试频率大于0、是最后一步或达到测试频率）
+- 使用计时器记录验证时间（绿色显示）
+- 执行验证并更新指标
+- 如果是最后一步，保存最后的验证指标
+
+### 检查点保存
+
+```python
+esi_close_to_expiration = should_save_ckpt_esi(
+    max_steps_duration=self.max_steps_duration,
+    redundant_time=self.config.trainer.esi_redundant_time,
+)
+
+if self.config.trainer.save_freq > 0 and (
+    is_last_step or self.global_steps % self.config.trainer.save_freq == 0 or esi_close_to_expiration
+):
+    if esi_close_to_expiration:
+        print("Force saving checkpoint: ESI instance expiration approaching.")
+    with marked_timer("save_checkpoint", timing_raw, color="green"):
+        self._save_checkpoint()
+```
+
+__解释__：
+
+- 检查 ESI（弹性服务器实例）是否接近过期
+- 如果满足保存条件（保存频率大于0且是最后一步或达到保存频率或 ESI 接近过期）
+- 使用计时器记录保存时间（绿色显示）
+- 保存检查点
+
+### 性能分析停止
+
+```python
+with marked_timer("stop_profile", timing_raw):
+    next_step_profile = (
+        self.global_steps + 1 in self.config.global_profiler.steps
+        if self.config.global_profiler.steps is not None
+        else False
+    )
+    self._stop_profiling(
+        curr_step_profile and not next_step_profile
+        if self.config.global_profiler.profile_continuous_steps
+        else curr_step_profile
+    )
+    prev_step_profile = curr_step_profile
+    curr_step_profile = next_step_profile
+```
+
+__解释__：
+
+- 计算下一步的性能分析标志
+- 根据配置停止性能分析
+- 更新性能分析状态标志
+
+### 步骤持续时间更新
+
+```python
+steps_duration = timing_raw["step"]
+self.max_steps_duration = max(self.max_steps_duration, steps_duration)
+```
+
+__解释__：更新最大步骤持续时间。
+
+### 指标收集和记录
+
+```python
+metrics.update(
+    {
+        "training/global_step": self.global_steps,
+        "training/epoch": epoch,
+    }
+)
+metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
+n_gpus = self.resource_pool_manager.get_n_gpus()
+metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
+```
+
+__解释__：
+
+- 更新训练步数和 epoch 信息
+- 计算数据指标
+- 计算时间指标
+- 计算吞吐量指标
+
+### 课程学习更新
+
+```python
+if isinstance(self.train_dataloader.sampler, AbstractCurriculumSampler):
+    self.train_dataloader.sampler.update(batch=batch)
+```
+
+__解释__：如果使用课程学习采样器，更新采样器状态。
+
+### 日志记录
+
+```python
+logger.log(data=metrics, step=self.global_steps)
+```
+
+__解释__：记录所有指标到日志系统。
+
+### 进度更新和清理
+
+```python
+progress_bar.update(1)
+self.global_steps += 1
+
+if (
+    hasattr(self.config.actor_rollout_ref.actor, "profiler")
+    and self.config.actor_rollout_ref.actor.profiler.tool == "torch_memory"
+):
+    self.actor_rollout_wg.dump_memory_snapshot(
+        tag=f"post_update_step{self.global_steps}", sub_dir=f"step{self.global_steps}"
+    )
+```
+
+__解释__：
+
+- 更新进度条和全局步数
+- 如果配置了内存分析器，转储内存快照
+
+### 训练结束处理
+
+```python
+if is_last_step:
+    pprint(f"Final validation metrics: {last_val_metrics}")
+    progress_bar.close()
+    return
+
+if hasattr(self.train_dataset, "on_batch_end"):
+    self.train_dataset.on_batch_end(batch=batch)
+```
+
+__解释__：
+
+- 如果是最后一步，打印最终验证指标，关闭进度条并返回
+- 如果数据集有批次结束回调，调用该回调
