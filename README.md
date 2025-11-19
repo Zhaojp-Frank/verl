@@ -633,3 +633,251 @@ sequenceDiagram
         Critic-->>Main: 价值函数更新
     end
 ```
+## 主要组件说明
+
+- **RayDAPOTrainer**: 训练协调器，运行在driver进程
+- **ActorRolloutWorkerGroup**: Actor模型和Rollout引擎的工作组（Megatron训练 + vLLM推理）
+- **CriticWorkerGroup**: Critic模型的工作组（Megatron训练）
+- **RefPolicyWorkerGroup**: 参考策略模型的工作组（可选）
+- **RewardModelWorkerGroup**: 奖励模型的工作组（可选）
+- **reward_fn**: 奖励函数（规则或模型）
+
+## 完整训练流程时序图
+
+```mermaid
+sequenceDiagram
+    participant Driver as RayDAPOTrainer<br/>(Driver进程)
+    participant ActorRollout as ActorRolloutWorkerGroup<br/>(Megatron+vLLM)
+    participant Critic as CriticWorkerGroup<br/>(Megatron)
+    participant RefPolicy as RefPolicyWorkerGroup<br/>(可选)
+    participant RM as RewardModelWorkerGroup<br/>(可选)
+    participant RewardFn as reward_fn<br/>(规则/函数)
+
+    Note over Driver: fit() 入口
+    
+    rect rgb(240, 240, 255)
+        Note over Driver: 初始化阶段
+        Driver->>Driver: _load_checkpoint()
+        Driver->>Driver: _validate() (可选)
+    end
+
+    loop 每个训练步骤 (global_steps)
+        rect rgb(255, 240, 240)
+            Note over Driver,ActorRollout: 1. 生成序列阶段 (generate_sequences)
+            Driver->>Driver: 准备gen_batch (pop input_ids等)
+            Driver->>Driver: gen_batch.repeat(n次采样)
+            Driver->>ActorRollout: generate_sequences(gen_batch)
+            Note over ActorRollout: vLLM推理引擎生成响应
+            ActorRollout-->>Driver: gen_batch_output (responses)
+            Driver->>Driver: batch.union(gen_batch_output)
+        end
+
+        rect rgb(255, 255, 240)
+            Note over Driver,RewardFn: 2. 计算奖励阶段 (compute_reward)
+            
+            opt 如果使用奖励模型
+                Driver->>RM: compute_rm_score(batch)
+                RM-->>Driver: rm_scores
+                Driver->>Driver: batch.union(rm_scores)
+            end
+            
+            Driver->>RewardFn: reward_fn(batch)
+            Note over RewardFn: 计算token级别的奖励分数
+            RewardFn-->>Driver: token_level_scores
+            Driver->>Driver: batch["token_level_scores"] = scores
+        end
+
+        rect rgb(240, 255, 240)
+            Note over Driver,ActorRollout: 3. 计算对数概率阶段 (compute_log_prob)
+            Driver->>ActorRollout: compute_log_prob(batch)
+            Note over ActorRollout: Megatron前向传播计算log_probs
+            ActorRollout-->>Driver: old_log_probs + entropys
+            Driver->>Driver: batch.union(old_log_prob)
+            Driver->>Driver: 计算entropy指标
+        end
+
+        opt 如果使用参考策略
+            rect rgb(240, 255, 255)
+                Note over Driver,RefPolicy: 4. 计算参考策略对数概率
+                Driver->>RefPolicy: compute_ref_log_prob(batch)
+                RefPolicy-->>Driver: ref_log_prob
+                Driver->>Driver: batch.union(ref_log_prob)
+            end
+        end
+
+        opt 如果使用Critic
+            rect rgb(255, 240, 255)
+                Note over Driver,Critic: 5. 计算价值函数 (compute_values)
+                Driver->>Critic: compute_values(batch)
+                Note over Critic: Megatron前向传播计算values
+                Critic-->>Driver: values
+                Driver->>Driver: batch.union(values)
+            end
+        end
+
+        rect rgb(255, 245, 230)
+            Note over Driver: 6. 应用KL惩罚 (apply_kl_penalty)
+            opt 如果use_kl_in_reward=True
+                Driver->>Driver: apply_kl_penalty(batch, kl_ctrl)
+                Note over Driver: kld = kl_penalty(old_log_probs, ref_log_prob)<br/>token_level_rewards = scores - beta * kld<br/>更新KL控制器
+                Driver->>Driver: batch["token_level_rewards"] = rewards
+            end
+        end
+
+        rect rgb(230, 245, 255)
+            Note over Driver: 7. 计算优势函数 (compute_advantages)
+            Driver->>Driver: compute_response_mask(batch)
+            Driver->>Driver: compute_advantage(batch, adv_estimator)
+            Note over Driver: 根据算法类型计算优势:<br/>- GAE: compute_gae_advantage_return()<br/>- GRPO: compute_grpo_outcome_advantage()<br/>- REMAX/REINFORCE++等其他估计器
+            Driver->>Driver: batch["advantages"] = advantages<br/>batch["returns"] = returns
+        end
+
+        opt 如果使用Critic
+            rect rgb(255, 230, 245)
+                Note over Driver,Critic: 8. 更新Critic (update_critic)
+                Driver->>Critic: update_critic(batch)
+                Note over Critic: Megatron训练:<br/>1. 前向传播计算values<br/>2. 计算value loss<br/>3. 反向传播<br/>4. 优化器更新
+                Critic-->>Driver: critic_output (metrics)
+                Driver->>Driver: 收集critic指标
+            end
+        end
+
+        rect rgb(245, 230, 255)
+            Note over Driver,ActorRollout: 9. 更新Actor (update_actor)
+            opt 如果global_steps > critic_warmup
+                Driver->>ActorRollout: update_actor(batch)
+                Note over ActorRollout: Megatron训练:<br/>1. 前向传播计算log_probs<br/>2. 计算policy loss (PPO clip)<br/>3. 反向传播<br/>4. 优化器更新
+                ActorRollout-->>Driver: actor_output (metrics)
+                Driver->>Driver: 收集actor指标
+            end
+        end
+
+        rect rgb(230, 255, 230)
+            Note over Driver: 10. 验证和保存
+            opt 如果到达test_freq
+                Driver->>Driver: _validate()
+            end
+            
+            opt 如果到达save_freq
+                Driver->>Driver: _save_checkpoint()
+            end
+        end
+
+        Driver->>Driver: 收集和记录所有指标
+        Driver->>Driver: global_steps += 1
+    end
+
+    Note over Driver: 训练完成
+```
+
+## 关键步骤详解
+
+### 1. generate_sequences() - 序列生成
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:87) → [`actor_rollout_wg.generate_sequences()`](verl/workers/fsdp_workers.py:200)
+- **功能**: 使用vLLM推理引擎生成响应序列
+- **输入**: gen_batch (prompts, attention_mask等)
+- **输出**: responses, rollout_log_probs等
+
+### 2. compute_reward() - 奖励计算
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:127)
+- **功能**: 
+  - 可选：调用奖励模型计算分数
+  - 调用reward_fn结合规则和模型分数
+- **输出**: token_level_scores
+
+### 3. compute_log_prob() - 对数概率计算
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:145) → [`actor_rollout_wg.compute_log_prob()`](verl/workers/fsdp_workers.py:220)
+- **功能**: 使用Megatron训练引擎重新计算当前策略的log_probs
+- **输出**: old_log_probs, entropys
+
+### 4. compute_ref_log_prob() - 参考策略对数概率
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:157) → [`ref_policy_wg.compute_ref_log_prob()`](verl/workers/fsdp_workers.py:235)
+- **功能**: 计算参考策略（冻结模型）的log_probs
+- **输出**: ref_log_prob
+
+### 5. compute_values() - 价值函数计算
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:164) → [`critic_wg.compute_values()`](verl/workers/fsdp_workers.py:250)
+- **功能**: 使用Critic模型计算状态价值
+- **输出**: values
+
+### 6. apply_kl_penalty() - KL惩罚应用
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:169) → [`apply_kl_penalty()`](verl/trainer/ppo/ray_trainer.py:127)
+- **功能**: 
+  - 计算当前策略和参考策略之间的KL散度
+  - 应用KL惩罚到奖励: `token_level_rewards = scores - beta * kld`
+  - 更新自适应KL控制器
+- **输出**: token_level_rewards, KL指标
+
+### 7. compute_advantages() - 优势函数计算
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:177) → [`compute_advantage()`](verl/trainer/ppo/ray_trainer.py:189)
+- **功能**: 根据不同的优势估计器计算优势
+  - **GAE**: 广义优势估计 [`compute_gae_advantage_return()`](verl/trainer/ppo/core_algos.py)
+  - **GRPO**: 组相对策略优化 [`compute_grpo_outcome_advantage()`](verl/trainer/ppo/core_algos.py)
+  - **REMAX**: 最大化奖励优势估计
+  - **REINFORCE++**: 增强版REINFORCE
+- **输出**: advantages, returns
+
+### 8. update_critic() - Critic更新
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:186) → [`critic_wg.update_critic()`](verl/workers/fsdp_workers.py:260)
+- **功能**: 
+  - 使用Megatron训练引擎更新Critic
+  - 计算value loss: `(values - returns)^2`
+  - 反向传播和优化器更新
+- **输出**: critic训练指标
+
+### 9. update_actor() - Actor更新
+- **位置**: [`RayDAPOTrainer.fit()`](recipe/dapo/dapo_ray_trainer.py:194) → [`actor_rollout_wg.update_actor()`](verl/workers/fsdp_workers.py:200)
+- **功能**: 
+  - 使用Megatron训练引擎更新Actor
+  - 计算PPO clip loss
+  - 反向传播和优化器更新
+- **输出**: actor训练指标
+
+## 数据流转
+
+```mermaid
+graph LR
+    A[Prompts] --> B[generate_sequences]
+    B --> C[Responses]
+    C --> D[compute_reward]
+    D --> E[token_level_scores]
+    C --> F[compute_log_prob]
+    F --> G[old_log_probs]
+    C --> H[compute_ref_log_prob]
+    H --> I[ref_log_prob]
+    E --> J[apply_kl_penalty]
+    I --> J
+    J --> K[token_level_rewards]
+    C --> L[compute_values]
+    L --> M[values]
+    K --> N[compute_advantages]
+    M --> N
+    N --> O[advantages + returns]
+    O --> P[update_critic]
+    O --> Q[update_actor]
+```
+
+## 关键配置参数
+
+- `actor_rollout_ref.rollout.n`: 每个prompt的采样次数
+- `algorithm.adv_estimator`: 优势估计器类型 (GAE/GRPO/REMAX等)
+- `algorithm.use_kl_in_reward`: 是否在奖励中使用KL惩罚
+- `algorithm.gamma`: 折扣因子
+- `algorithm.lam`: GAE的lambda参数
+- `trainer.critic_warmup`: Critic预热步数
+
+## 性能优化
+
+1. **混合引擎**: Megatron用于训练（支持大规模并行），vLLM用于推理（高吞吐量）
+2. **批处理**: 所有操作都是批量处理
+3. **分布式**: 使用Ray进行分布式协调
+4. **异步计算**: 部分操作可以异步执行（如reward_fn）
+5. **内存优化**: 支持gradient checkpointing、offload等技术
+
+## 参考文件
+
+- 主训练器: [`recipe/dapo/dapo_ray_trainer.py`](recipe/dapo/dapo_ray_trainer.py)
+- 基类训练器: [`verl/trainer/ppo/ray_trainer.py`](verl/trainer/ppo/ray_trainer.py)
+- FSDP Workers: [`verl/workers/fsdp_workers.py`](verl/workers/fsdp_workers.py)
+- Megatron Workers: [`verl/workers/megatron_workers.py`](verl/workers/megatron_workers.py)
+- 核心算法: [`verl/trainer/ppo/core_algos.py`](verl/trainer/ppo/core_algos.py)
